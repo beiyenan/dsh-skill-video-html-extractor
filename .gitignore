@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+*.wav
+*.mp4
+*.mov
+*.mkv
+*.mp3
+*.chunks/
+.report.json
+
