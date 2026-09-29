@@ -26,6 +26,42 @@
   - `SILICONFLOW_API_KEY` 或 `~/.dsh/secrets/siliconflow_api_key` —— ASR（必须）
   - `ZHIPU_API_KEY` 或 `~/.dsh/secrets/zhipu_api_key` —— 机器校正（可选，缺了退纯手工校正）
 
+## 安装到 DSH（DeepSeek Harness）
+
+本 skill 设计为可被 DSH 的 Agent 一键自动安装，无需人工手敲命令。任何一台装好 DSH 的设备上，对 Agent 说：
+
+> 「帮我从 https://github.com/beiyenan/dsh-skill-video-html-extractor 安装 video-html-extractor 这个 skill，并配置好硅基流动和智谱的密钥。」
+
+Agent 会**自动完成**：
+1. `git clone` 本仓库
+2. 把 `SKILL.md` + `scripts/` 复制到 `~/.dsh/skills/video-html-extractor/`
+3. 检查 ffmpeg（缺失则自动安装）
+4. 重启 DSH 使 skill 生效
+
+> ⚠️ **密钥不在仓库里**（安全设计，仓库只含读取逻辑不含 key 值）。Agent 安装时你需要**手动提供**：
+> - 硅基流动 key → 写入 `~/.dsh/secrets/siliconflow_api_key`（ASR，必须）
+> - 智谱 key → 写入 `~/.dsh/secrets/zhipu_api_key`（机器校正，可选）
+>
+> 脚本运行时优先读环境变量 `SILICONFLOW_API_KEY` / `ZHIPU_API_KEY`，其次读上述 secrets 文件。
+
+**手动安装方式**（不依赖 Agent 时）：
+```bash
+git clone https://github.com/beiyenan/dsh-skill-video-html-extractor.git
+mkdir -p ~/.dsh/skills/video-html-extractor/scripts
+cp dsh-skill-video-html-extractor/SKILL.md ~/.dsh/skills/video-html-extractor/
+cp dsh-skill-video-html-extractor/scripts/*.py ~/.dsh/skills/video-html-extractor/scripts/
+mkdir -p ~/.dsh/secrets
+echo "你的硅基流动key" > ~/.dsh/secrets/siliconflow_api_key
+echo "你的智谱key"     > ~/.dsh/secrets/zhipu_api_key
+chmod 600 ~/.dsh/secrets/*
+```
+重启 DSH 后 skill 即被识别。
+
+**更新已有副本**：
+```bash
+cd ~/.dsh/skills/video-html-extractor && git pull
+```
+
 ## 双轨原则
 
 HTML 正文用**校正稿**表述；`transcript.txt` 永远保留 **ASR 原始逐字稿**，供用户回溯核对。
