@@ -66,6 +66,37 @@ cd ~/.dsh/skills/video-html-extractor && git pull
 
 HTML 正文用**校正稿**表述；`transcript.txt` 永远保留 **ASR 原始逐字稿**，供用户回溯核对。
 
+## 多平台安装说明（ffmpeg 是唯一差异点）
+
+skill 脚本本身**跨平台**：全部用 Python 3 标准库（无第三方 pip 依赖），`asr_transcribe.py` / `llm_calibrate.py` 走标准库 urllib 调云端 API，`render_html.py` / `viz_render.py` 纯本地渲染。**唯一平台差异是 ffmpeg** —— `extract_audio.py` 需要它把视频/音频解码成 16kHz mono WAV。
+
+`extract_audio.py` 内置了 ffmpeg 探测逻辑，按「系统 PATH 有 ffmpeg → 直接调用」的优先级走，所以只要各端装好 ffmpeg 即可，无需改脚本。
+
+### 各端 ffmpeg 安装方式
+
+| 平台 | 安装命令 | 备注 |
+|------|----------|------|
+| **Windows** | 去 [ffmpeg.org](https://ffmpeg.org/download.html) 下 builds → 解压 → 把 `bin` 加进系统 PATH | 或用 `winget install ffmpeg` / Chocolatey `choco install ffmpeg` |
+| **macOS** | `brew install ffmpeg` | 需先装 Homebrew |
+| **Linux (Debian/Ubuntu)** | `sudo apt install ffmpeg` | 各发行版包管理器装同名包即可 |
+| **Android (DSH 工具链)** | `extract_audio.py` 自动找 `usr/bin/ffmpeg` 并注入 `LD_LIBRARY_PATH`+`LD_PRELOAD` | 无需手动装；缺失时参考 [安装手册/恢复手册] 的 4.4 节重建 |
+
+> **Android 特有**：`extract_audio.py` 会自动处理 Android 直跑 ffmpeg 缺 `.so` / preload 的坑（脚本已内置）。**电脑端无此问题**，走系统 ffmpeg 分支即可。
+
+### 验证 ffmpeg 已就绪
+
+```bash
+ffmpeg -version   # 能打印版本号即通过
+```
+
+### 跨平台通用安装步骤
+
+无论哪端 DSH，Agent 都能从本仓库自动安装（见上文「安装到 DSH」一节），只需：
+1. clone 本仓库 → 放到 `~/.dsh/skills/video-html-extractor/`
+2. 各端按上表装好 ffmpeg
+3. 配置两个 key（硅基流动 + 智谱）到 `~/.dsh/secrets/`
+4. 重启 DSH → skill 生效
+
 ## 目录结构
 
 ```
