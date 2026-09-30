@@ -3,7 +3,7 @@
 
 用法:
   SILICONFLOW_API_KEY=... python3 asr_transcribe.py <wav> <out.txt> \
-      [--model Qwen/Qwen3-ASR-1.7B] [--chunk-seconds 120] [--out-dir <chunks dir>]
+      [--model XingChenAGI/XingChenASR-V3.2-Ultra] [--chunk-seconds 120] [--out-dir <chunks dir>]
 
 - 音频切成 chunk-seconds（默认120s）块，逐块 POST 硅基流动 /audio/transcriptions
 - 输出文本行格式: [mm:ss] 内容
@@ -64,7 +64,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('wav')
     ap.add_argument('out_txt')
-    ap.add_argument('--model', default='Qwen/Qwen3-ASR-1.7B')
+    ap.add_argument('--model', default='XingChenAGI/XingChenASR-V3.2-Ultra')
     ap.add_argument('--chunk-seconds', type=int, default=120)
     ap.add_argument('--out-dir', default=None)
     ap.add_argument('--workers', type=int, default=2,
