@@ -1,16 +1,16 @@
 ---
 name: video-html-extractor
-description: 从用户上传的视频/音频文件提取文案（语音转文字），把转写内容结构化后生成两版单文件 HTML——阅读版（浅色、长文、可搜索逐字稿）与数据看板版（亮/暗主题、指标卡/逻辑链/时间线/对比表），并按文案主题自动命名产物文件。适用于用户上传 .mp4/.mov/.mkv/.mp3/.wav/.m4a/.flac/.ogg 等音视频文件并要求「提取文案」「转成文字」「做成网页/HTML」「可视化」「整理一下内容」的场景。
+description: 从用户上传的视频/音频文件提取文案（语音转文字），把转写内容结构化后生成两版单文件 HTML——摘要版（8 种视觉组件混合排版）与阅读版（逐字稿分段排版、时间戳导航），并按文案主题自动命名产物文件。适用于用户上传 .mp4/.mov/.mkv/.mp3/.wav/.m4a/.flac/.ogg 等音视频文件并要求「提取文案」「转成文字」「做成网页/HTML」「可视化」「整理一下内容」的场景。
 ---
 
-# 视频文案提取 → 双版可视化 HTML
+# 视频文案提取 → 两版可视化 HTML
 
 把用户上传的音视频文件转成：
 1. 纯文本转写稿（`transcript.txt`）
-2. **阅读版** HTML（`render_html.py`）：浅色长文风，适合细读，逐字稿可搜索
-3. **看板版** HTML（`viz_render.py`）：数据看板风，指标卡/逻辑链/事件卡/时间线/对比表/结论区；默认亮色（`--theme=light`），可暗色（dark）或一次两版（both）
+2. **摘要版** HTML（`render_html.py`）：8 种视觉组件混合排版，结构化展示章节/要点/金句，逐字稿可搜索
+3. **阅读版** HTML（`read_render.py`）：逐字稿按段落分段排版，时间戳导航，适合细读全文
 
-两份结构化数据（`analysis.json` / `dashboard.json`）**共用第 4 步的校正稿与标题**；两个渲染器只负责呈现，不各自为政。
+结构化数据只维护一份 `analysis.json`，两个渲染器共用标题与数据，不各自为政。
 
 ## 何时使用
 
@@ -27,7 +27,7 @@ description: 从用户上传的视频/音频文件提取文案（语音转文字
 | `ZHIPU_API_KEY` | 智谱 API key（机器校正，可选） | 未设置时 `llm_calibrate.py` 自动读 `~/.dsh/secrets/zhipu_api_key`；没有则跳过 3.5 步，校正回退为主模型手工完成 |
 | `VIDEO2HTML_OUT` | 输出目录 | 输入文件同目录 |
 
-推荐 ASR 模型：`Qwen/Qwen3-ASR-1.7B`（免费、速度快、中文好）。备选：`XingChenAGI/XingChenASR-V3.2-Ultra`（会输出"嗯"等语气词，适合口语化内容）、`XingChenAGI/XingChenASR-Diarize-V3.0`（带说话人分离）。
+推荐 ASR 模型：`XingChenAGI/XingChenASR-V3.2-Ultra`（**免费**，会输出"嗯"等语气词，适合口语化内容；2026-09-30 用户核实后确定为默认）。备选：`Qwen/Qwen3-ASR-1.7B`（质量好但按秒计费）、`FunAudioLLM/SenseVoiceSmall`（按秒计费最低价）、`XingChenAGI/XingChenASR-Diarize-V3.0`（带说话人分离）。
 
 ## 工作流
 
@@ -57,7 +57,7 @@ python3 <skill_dir>/scripts/extract_audio.py <输入文件> <输出.wav>
 
 ```bash
 SILICONFLOW_API_KEY=... python3 <skill_dir>/scripts/asr_transcribe.py <wav文件> <输出txt> \
-    [--model Qwen/Qwen3-ASR-1.7B] [--chunk-seconds 120] [--workers 2]
+    [--model XingChenAGI/XingChenASR-V3.2-Ultra] [--chunk-seconds 120] [--workers 2]
 ```
 
 脚本把 WAV 按 `chunk-seconds`（默认 120s）切片，**每片重包 RIFF 头**（已验证：裸 PCM 会 500，带才行），逐片 POST 硅基流动 `/audio/transcriptions`，拼接为带时间戳的纯文本：
@@ -125,51 +125,75 @@ ASR 原始输出常见问题：
 - `timeline`（可选）：如果内容有明显时间顺序，给 `{time, event}` 列表
 - `tone`：语气判断（教程/访谈/演讲/新闻/…）
 
-#### 4c. 为看板版再整理一份 `dashboard.json`
+#### 4b-附. 叙事骨架选择
 
-看板版不吃 `sections` 长文，吃「结构化要素」。把 4b 的成果按下面映射重排（内容、标题、时间戳**复用**，不重新创作）：
+不要按原文顺序搬运，按「读者最容易理解」的顺序重排。三种骨架：
+- **A. 时间线骨架**：有成长/演化过程 → 起点 → 转折 → 危机 → 破局 → 当前状态
+- **B. 问题-解法骨架**：方法论 → 痛点1/解法1、痛点2/解法2…
+- **C. 总-分-总骨架**：观点类 → 结论先行 → 论据 → 回扣结论
 
-| dashboard 字段 | 从哪来 |
-|----------------|--------|
-| `title` / `subtitle` / `tags` | 与 analysis 同一 `title`；subtitle=summary 压缩成 1-2 句；tags=主题标签 |
-| `metrics`（3-10 个大数字卡） | 全文最有冲击力的数字（数字+单位+一句标签），`tone`: acc/red/green/blue/purple |
-| `chain`（叙事逻辑链） | 内容推进的因果/步骤顺序，3-7 步 |
-| `events`（事件/证据卡） | 支撑论点的实验、案例、事故 |
-| `timeline` | 有明显时序或历史案例对照时 |
-| `tables`（对比表） | 多方案/多主体横向比较（观点、路径、竞品…） |
-| `points`（编号观点卡） | 讲者明确列出的主张/建议 |
-| `list`（排名清单+“没有的东西”） | 讲者给的排序清单；`missing` 放「清单里缺席的那些」这类反差句 |
-| `framework`（2-4 列行动框架） | 可执行建议归成的维度 |
-| `conclusion`（金句收尾） | 原文结语/引语，`quote` 必须是原话 |
-| `footer.calibration`（存疑脚注） | 把 4a 的校正表转写成人话：**改了什么、哪些存疑未改、以原视频为准** |
-| `entities` | 与 analysis 一致，仍要逐条 grep 自检 |
+提炼口诀：**痛点 → 解法 → 认知**。给每章编号（01、02…），一句话副标题说明这章讲什么。
 
-硬约束（与方案一致）：数字/引语忠实原文，不编造；没有对应素材的字段直接省略（渲染器按缺省跳过模块）。
+#### 4b-附2. 内容本质→视觉组件映射（关键一步）
 
-原则：
-- **忠实**：只写转写稿里实际有的内容，不脑补、不扩写。
-- **可理解**：`sections` 用平实语言重组逻辑顺序（如散乱口语 → 主题归拢），但观点/数字/例子必须保留。
-- `key_takeaways` 每条必须能在 transcript 找到对应原文位置（标 `[mm:ss]`）。
-- **实体自检（防幻觉）**：`entities` 里每个人名/书名必须能在 transcript 原文或 4a 校正表中找到依据；凭"这类内容通常还会提到谁"联想出来的一律删除。生成后逐条 grep 核对一遍。
+**不同的内容类型必须用不同的视觉组件**，这是「排版可视化」和「分段搬运」的分水岭。`render_html.py` 根据 `analysis.json` 中的字段自动选择组件：
+
+| 内容本质 | 自动使用的组件 | analysis.json 字段 |
+|---------|-------------|------------------|
+| 全局概览数字 | **数据卡组**（大数字+小标签） | `hero_facts[]` |
+| 有先后顺序的历程 | **时间线**（竖线+圆点，按状态变色：蓝/绿/橙/红） | `timeline[]` 或 `sections[].type=timeline` |
+| 前后对比/好坏对照 | **对比卡**（左右两栏，✕/✓ 列表） | `sections[].type=compare` |
+| 痛点与解法 | **配对卡**（标签：痛点=红，解法=绿）+ 引语 | `sections[].type=pair` |
+| 系统结构/组织关系 | **架构图**（顶部节点+连接线+三列卡片） | `sections[].type=architecture` |
+| 流程/资金/数据流向 | **流程图**（节点+箭头，起止节点高亮） | `sections[].type=flow` |
+| 核心观点句 | **金句卡**（左侧色条+加大字号） | `conclusion.quote` 或 `sections[].type=quote` |
+| 可执行要点清单 | **清单行**（序号图标+标题+说明） | `key_takeaways[]` 或 `sections[].type=list` |
+| 普通论述段落 | 标准 section（章节头+编号+段落） | `sections[]` 默认 |
+
+判断技巧：**先问"这段内容本质上是哪种关系"**——时序？对比？结构？流程？关系决定组件。绝不要把所有内容都堆成 `<p>`。
+
+#### 4b-附3. 内容处理红线
+
+| 允许 | 禁止 |
+|------|------|
+| 删口语赘词、重复、语气词 | 改变原意、增删事实 |
+| 合并同义表述 | 把"约谈"美化成"沟通" |
+| 提炼小标题 | 给原文没有的结论 |
+| 校正明显错别字（并标注） | 静默改写、不留痕 |
+| 金句原样引用（加引号） | 篡改引语字词 |
+| 用表格/组件重组信息 | 把不确定的信息写成确定 |
+
+金句处理：原文中"说白了/其实/说到底"后面那句往往就是金句，原样引用。数字处理：所有数字都提到 hero 数据卡，数字是最强的记忆锚点。术语校正标注：文末用一行小字说明，如"转录中'艺人公司'按上下文校正为'一人公司'"。
 
 ### 第 5 步：生成 HTML（两版）
 
 ```bash
-# 5.1 阅读版（浅色长文）：沿用 analysis.json；交付默认加 --clean
-python3 <skill_dir>/scripts/render_html.py analysis.json transcript.txt --clean
+# 5.1 摘要版（8 种组件混合排版）
+python3 <skill_dir>/scripts/render_html.py analysis.json transcript.txt [--clean] [--theme=light|dark]
 
-# 5.2 看板版：用 dashboard.json；--theme=light|dark|both（默认 light）；交付默认加 --clean
-python3 <skill_dir>/scripts/viz_render.py dashboard.json "" transcript.txt --theme=both --clean
+# 5.2 阅读版（逐字稿分段排版，时间戳导航）
+python3 <skill_dir>/scripts/read_render.py transcript.txt analysis.json [--theme=light|dark]
 ```
 
-- `render_html.py`：标题/摘要/核心要点卡/主题分节/时间轴/可搜索逐字稿；文件名自动 = `title`（校验泛词会拒绝渲染，看板版沿用同一标题即可）。
-- `viz_render.py`：单文件、样式全内联、**零 JS 零外部资源**（渲染后自报检查）；亮色为默认交付主题，`--theme=both` 同时输出 `_light` / `_dark` 两个文件。行内语法：`**x**` 金色强调、`[mm:ss]` 自动变溯源徽章（`--clean` 时直接去掉）；不传输出名（或传空串，已修复）时自动命名 `<时间戳>-<标题>_visualization_<主题>.html`，与阅读版同目录同前缀。
-- **交付默认加 `--clean`（用户偏好，2026-09 起）**：两版都不内嵌 ASR 原始逐字稿、不输出 `[mm:ss]` 分钟标记；页脚自动注明「逐字稿未收入本页，如需回溯请保留随附 transcript.txt」。双轨原则不变——**transcript.txt 仍作为独立文件一并交付**。两版语义差异：阅读版 `--clean` 同时略过时间线 section 与「N 段转写」meta；看板版保留时间线事件内容，只去掉时间戳 chip（案例本身有信息量）。用户明确要「把逐字稿放进网页」或「保留时间戳跳转」时再去掉 `--clean`。
-- 两版都用第 4 步的同一 `title` 命名，保证产物成套。
+- `render_html.py`：**摘要版**——8 种视觉组件混合排版，设计令牌系统，亮色默认/暗色可选，内容区宽 1080px。`--clean` 时不内嵌逐字稿。文件名自动 = `analysis.json` 的 `title`。
+- `read_render.py`：**阅读版**——逐字稿按段落分段（每段 ~50-150 字，无时间戳），16px 正文、1.85 行高、两端对齐，每 10 段自动加分隔线。顶部粘性工具栏：A-/A+ 字体大小（14/16/18/20/22/25px）、🔤 字体下拉菜单（宋体/黑体/仿宋/等线）、☀️ 亮/暗主题切换，偏好自动存 localStorage。文件名 = `<title>_阅读版.html`。
+- 两版都用同一 `title` 命名，保证产物成套。
 
 ### 第 6 步：交付
 
-用 `present` 把**两版 HTML（默认 --clean 模式）+ transcript.txt** 一起交付（若用户只要其中一版，按用户要求）。若用户只要文字，直接贴 `transcript.txt`。用户嫌某一版风格不合时：改主题用 `--theme`，改结构只动 `dashboard.json`，不要手改 HTML。用户要「把逐字稿放进网页 / 保留时间戳跳转」时，去掉 `--clean` 重新渲染。
+用 `present` 把**摘要版 HTML + 阅读版 HTML + transcript.txt** 一起交付（若用户只要其中部分，按用户要求）。用户嫌风格不合时：改主题用 `--theme=dark`，改摘要结构只动 `analysis.json`，不要手改 HTML。用户要纯文字直接贴 `transcript.txt`。
+
+**交付前自查清单**（每次渲染完过一遍）：
+- [ ] 所有数字与原文一致，没有编造
+- [ ] 没有漏掉原文的关键因果链
+- [ ] 每段内容都选对了组件（时序→时间线，对比→对比卡…）
+- [ ] 颜色全部走 `var()`，没有散落的写死颜色
+- [ ] 已检查浅色底上是否有浅色文字（对比度）
+- [ ] 已在浏览器里打开确认渲染，无报错
+- [ ] 手机宽度（≤820px）下单列可读
+- [ ] 阅读版时间戳导航可点击跳转
+- [ ] 单文件、无外部依赖
+- [ ] 术语校正/免责说明已加在文末
 
 ## 降级方案（音频提取失败时）
 
@@ -185,4 +209,4 @@ python3 <skill_dir>/scripts/viz_render.py dashboard.json "" transcript.txt --the
 - 不处理需登录/付费墙的视频 URL（本 skill 只接受用户提供的本地文件）。
 - 不做语音合成、不做视频剪辑。
 - 转写语言以音频实际语言为准；ASR 模型中文效果最好，小语种（藏/彝/苗等）可能不准，需告知用户。
-- 看板版不做语音识别、不臆造数据：所有指标/引语必须能在 `transcript.txt` 找到出处。
+- 不做语音识别之外的臆造：所有数字/引语必须能在 `transcript.txt` 找到出处。

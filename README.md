@@ -26,6 +26,17 @@
   - `SILICONFLOW_API_KEY` 或 `~/.dsh/secrets/siliconflow_api_key` —— ASR（必须）
   - `ZHIPU_API_KEY` 或 `~/.dsh/secrets/zhipu_api_key` —— 机器校正（可选，缺了退纯手工校正）
 
+## 免费模型声明
+
+本 skill 调用的模型均为硅基流动与智谱提供的**免费模型**：
+
+| 用途 | 提供方 | 模型 | 免费 |
+|------|--------|------|------|
+| ASR 语音转写 | 硅基流动 | `XingChenAGI/XingChenASR-V3.2-Ultra`（默认） | ✅ 免费 |
+| 机器校正 | 智谱 | `glm-4.7`（默认） | ✅ 免费 |
+
+> 备选 ASR 模型：`Qwen/Qwen3-ASR-1.7B`、`XingChenAGI/XingChenASR-Diarize-V3.0`（带说话人分离）。均以各平台实际计费为准。
+
 ## 安装到 DSH（DeepSeek Harness）
 
 本 skill 设计为可被 DSH 的 Agent 一键自动安装，无需人工手敲命令。任何一台装好 DSH 的设备上，对 Agent 说：
