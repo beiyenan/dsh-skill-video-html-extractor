@@ -389,6 +389,8 @@ def render_list_section(sec):
 def render_default_section(sec):
     p = []
     items = sec.get("content", []) or sec.get("items", [])
+    if isinstance(items, str):
+        items = [items]
     for item in items:
         if isinstance(item, dict):
             p.append('<div class="std-card">')
@@ -400,8 +402,11 @@ def render_default_section(sec):
         else:
             p.append(f'<div class="std-card"><p>{esc(item)}</p></div>')
     if sec.get("key_points"):
+        kps = sec["key_points"]
+        if isinstance(kps, str):
+            kps = [kps]
         p.append('<div class="std-card"><ul>')
-        for kp in sec["key_points"]:
+        for kp in kps:
             p.append(f'<li>{esc(kp)}</li>')
         p.append('</ul></div>')
     return "\n".join(p)

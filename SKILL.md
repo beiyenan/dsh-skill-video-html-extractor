@@ -57,17 +57,17 @@ python3 <skill_dir>/scripts/extract_audio.py <输入文件> <输出.wav>
 
 ```bash
 SILICONFLOW_API_KEY=... python3 <skill_dir>/scripts/asr_transcribe.py <wav文件> <输出txt> \
-    [--model XingChenAGI/XingChenASR-V3.2-Ultra] [--chunk-seconds 120] [--workers 2]
+    [--model XingChenAGI/XingChenASR-V3.2-Ultra] [--chunk-seconds 自动] [--workers 3]
 ```
 
-脚本把 WAV 按 `chunk-seconds`（默认 120s）切片，**每片重包 RIFF 头**（已验证：裸 PCM 会 500，带才行），逐片 POST 硅基流动 `/audio/transcriptions`，拼接为带时间戳的纯文本：
+脚本把 WAV 按 `chunk-seconds` 切片，**每片重包 RIFF 头**（已验证：裸 PCM 会 500，带才行），逐片 POST 硅基流动 `/audio/transcriptions`，拼接为带时间戳的纯文本：
 ```
 [00:00] 这是开头说的话
 [02:03] 第二段内容
 ```
 输出 `transcript.txt`。每片原始 JSON 落盘到 `<wav>.chunks/`，支持断点重跑；单片失败重试 3 次，全失败则退出码 2（已有结果仍写出）。
 
-**`--workers`（默认 2）**：块级并发。实测 15.8 分钟视频（8 块）串行约 2 分钟，并发 2 约 1 分钟；免费档限流紧，不建议 >4。缓存机制与串行完全一致（已完成的块直接命中，重跑免费）。
+**`--chunk-seconds`（默认自动）**：不指定时按「总时长 ÷ workers」自动分块并夹取到 [30s, 240s]，使块数≈并发数、一轮并行跑完，比固定 120s 对大视频更省轮次。**`--workers`（默认 3）**：块级并发。实测 2:15 视频 2 块并发约 17-19s；免费档单次请求本身有 ~10s+ 固定开销且抖动 ±15s，块少并发足即可，不建议 >4。缓存机制与串行完全一致（已完成的块直接命中，重跑免费）。
 
 ### 第 3.5 步：机器校正预筛（可选，建议执行——省下 4a 的大部分时间）
 
@@ -182,6 +182,16 @@ python3 <skill_dir>/scripts/read_render.py transcript.txt analysis.json [--theme
 ### 第 6 步：交付
 
 用 `present` 把**摘要版 HTML + 阅读版 HTML + transcript.txt** 一起交付（若用户只要其中部分，按用户要求）。用户嫌风格不合时：改主题用 `--theme=dark`，改摘要结构只动 `analysis.json`，不要手改 HTML。用户要纯文字直接贴 `transcript.txt`。
+
+### 第 7 步：清理中间产物（交付后必做）
+
+交付完成后，**删除本次产生的全部中间文件**，只保留交付物（`*.html`、`transcript.txt`、`analysis.json`）。常见中间产物：
+- `*.wav` / `*.pcm` / `*.mp3` 等音频中间文件（提取、重采样、切片调试的产物）
+- `*.chunks/` 目录（ASR 分块缓存，断点重跑后才需要）
+- `asr_*.log` 等调试日志
+- 调试过程中试错产生的临时脚本/输出（如 `test_*.pcm`、`input_*.wav` 系列）
+
+**红线**：只删「本次任务」产生的文件，**绝不删输出目录里的历史文件**（其他任务的交付物 HTML、用户自己的资料）。`rm` 前先用 `ls`/`find -mtime` 或文件名特征确认归属，拿不准就问用户。目录占用巨大（数 GB 级）时更要逐个确认。
 
 **交付前自查清单**（每次渲染完过一遍）：
 - [ ] 所有数字与原文一致，没有编造

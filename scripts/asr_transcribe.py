@@ -3,9 +3,9 @@
 
 用法:
   SILICONFLOW_API_KEY=... python3 asr_transcribe.py <wav> <out.txt> \
-      [--model XingChenAGI/XingChenASR-V3.2-Ultra] [--chunk-seconds 120] [--out-dir <chunks dir>]
+      [--model XingChenAGI/XingChenASR-V3.2-Ultra] [--chunk-seconds 自动] [--out-dir <chunks dir>]
 
-- 音频切成 chunk-seconds（默认120s）块，逐块 POST 硅基流动 /audio/transcriptions
+- 音频切成 chunk-seconds 块（默认按 总时长/并发数 自动分块，夹取到 [30s,240s]），逐块 POST 硅基流动 /audio/transcriptions
 - 输出文本行格式: [mm:ss] 内容
 - 每块原始 JSON 落盘到 --out-dir（默认 <wav>.chunks/），支持断点重跑
 - 失败块重试共 3 次尝试；鉴权失败(401/403)立即放弃该块
@@ -60,15 +60,21 @@ def call_asr(api_key, base_url, model, wav_bytes, label):
     with urllib.request.urlopen(req, timeout=300) as r:
         return json.loads(r.read().decode())
 
+def wav_duration_seconds(path):
+    """只读 WAV 头部拿时长，避免整载音频。"""
+    with wave.open(path, 'rb') as w:
+        return w.getnframes() / float(w.getframerate())
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('wav')
     ap.add_argument('out_txt')
     ap.add_argument('--model', default='XingChenAGI/XingChenASR-V3.2-Ultra')
-    ap.add_argument('--chunk-seconds', type=int, default=120)
+    ap.add_argument('--chunk-seconds', type=int, default=None,
+                    help='每块秒数；默认按 总时长/并发数 自动分块（让块数≈并发数，一轮并行跑完最快）')
     ap.add_argument('--out-dir', default=None)
-    ap.add_argument('--workers', type=int, default=2,
-                    help='并发块数（默认 2；硅基流动 ASR 免费档限流较紧，不建议 >4）')
+    ap.add_argument('--workers', type=int, default=3,
+                    help='并发块数（默认 3；硅基流动 ASR 免费档限流较紧，不建议 >4）')
     args = ap.parse_args()
 
     api_key = os.environ.get('SILICONFLOW_API_KEY', '').strip()
@@ -89,10 +95,18 @@ def main():
     out_dir = args.out_dir or args.wav + '.chunks'
     os.makedirs(out_dir, exist_ok=True)
 
-    rate, chunks = chunk_wav(args.wav, args.chunk_seconds)
+    # 自动分块：让块数≈并发数（一轮并行跑完），并按区间 [30s, 240s] 夹取，防块过小堆 HTTP 开销 / 块过大触发超时
+    if args.chunk_seconds:
+        chunk_secs = args.chunk_seconds
+    else:
+        dur = wav_duration_seconds(args.wav)
+        chunk_secs = int(min(max(round(dur / args.workers), 30), 240))
+        print(f"INFO: 自动分块 -> {chunk_secs}s（音频 {dur:.0f}s / workers={args.workers}）去最接近整块", file=sys.stderr)
+
+    rate, chunks = chunk_wav(args.wav, chunk_secs)
     total = len(chunks)
     workers = max(1, min(args.workers, total))
-    print(f"INFO: 共 {total} 块 x {args.chunk_seconds}s, model={args.model}, workers={workers}")
+    print(f"INFO: 共 {total} 块 x {chunk_secs}s, model={args.model}, workers={workers}")
 
     lines = [None] * total
     failures = 0

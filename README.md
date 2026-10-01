@@ -1,22 +1,23 @@
 # video-html-extractor
 
-> 从用户上传的音视频文件提取文案（语音转文字），并生成**两版单文件 HTML**：阅读版（浅色长文、可搜索逐字稿）与数据看板版（指标卡/逻辑链/时间线/对比表）。产物按文案主题自动命名。
+> 从用户上传的音视频文件提取文案（语音转文字），并生成**两版单文件 HTML**：摘要版（8 种视觉组件混合排版，结构化展示章节/要点/金句）与阅读版（逐字稿分段排版、时间戳导航）。产物按文案主题自动命名。
 
 适用于 `.mp4/.mov/.mkv/.mp3/.wav/.m4a/.flac/.ogg` 等音视频文件，要求「提取文案」「转成文字」「做成网页/HTML」「可视化」「整理内容」的场景。
 
 ---
 
-## 工作流（6 步）
+## 工作流（7 步）
 
 | 步骤 | 脚本 | 说明 |
 |------|------|------|
 | 1. 确认输入 | — | 确认文件存在、可读、大小合理（>50MB 会分块转写） |
 | 2. 抽音频 | `extract_audio.py` | 解码为重采样 16kHz mono 16bit WAV（ASR 要求） |
-| 3. ASR 转写 | `asr_transcribe.py` | 按 120s 切片调硅基流动，拼接带时间戳的 `transcript.txt` |
+| 3. ASR 转写 | `asr_transcribe.py` | 按「总时长÷并发数」自动分块（[30s,240s]）调硅基流动，拼接带时间戳的 `transcript.txt` |
 | 3.5. 校正预筛 | `llm_calibrate.py` | （可选）调智谱 glm 做高置信度校正，产出 `transcript_calibrated.txt` + `report.json` |
-| 4. 结构化 | — | 校正终审 → `analysis.json` + `dashboard.json` |
-| 5. 生成 HTML | `render_html.py` / `viz_render.py` | 阅读版 + 看板版（`--theme=light\|dark\|both`） |
-| 6. 交付 | `present` | 两版 HTML + `transcript.txt` |
+| 4. 结构化 | — | 校正终审 → `analysis.json`（两个渲染器共用） |
+| 5. 生成 HTML | `render_html.py` / `read_render.py` | 摘要版 + 阅读版（`--theme=light\|dark`） |
+| 6. 交付 | `present` | 摘要版 + 阅读版 HTML + `transcript.txt` |
+| 7. 清理中间产物 | — | 只删本次产生的 wav/chunks/日志，保留交付物 |
 
 ## 依赖
 
@@ -79,7 +80,7 @@ HTML 正文用**校正稿**表述；`transcript.txt` 永远保留 **ASR 原始�
 
 ## 多平台安装说明（ffmpeg 是唯一差异点）
 
-skill 脚本本身**跨平台**：全部用 Python 3 标准库（无第三方 pip 依赖），`asr_transcribe.py` / `llm_calibrate.py` 走标准库 urllib 调云端 API，`render_html.py` / `viz_render.py` 纯本地渲染。**唯一平台差异是 ffmpeg** —— `extract_audio.py` 需要它把视频/音频解码成 16kHz mono WAV。
+skill 脚本本身**跨平台**：全部用 Python 3 标准库（无第三方 pip 依赖），`asr_transcribe.py` / `llm_calibrate.py` 走标准库 urllib 调云端 API，`render_html.py` / `read_render.py` 纯本地渲染。**唯一平台差异是 ffmpeg** —— `extract_audio.py` 需要它把视频/音频解码成 16kHz mono WAV。
 
 `extract_audio.py` 内置了 ffmpeg 探测逻辑，按「系统 PATH 有 ffmpeg → 直接调用」的优先级走，所以只要各端装好 ffmpeg 即可，无需改脚本。
 
@@ -116,10 +117,10 @@ ffmpeg -version   # 能打印版本号即通过
 ├── README.md           # 本文件
 └── scripts/
     ├── extract_audio.py     # 抽音频 -> 16kHz mono WAV（主流程）
-    ├── asr_transcribe.py    # 分块转写（调硅基流动，主流程）
+    ├── asr_transcribe.py    # 分块转写（调硅基流动，自动分块，主流程）
     ├── llm_calibrate.py     # 机器校正（调智谱，可选，主流程）
-    ├── render_html.py       # 阅读版 HTML（主流程）
-    ├── viz_render.py        # 看板版 HTML（light/dark/both，主流程）
+    ├── render_html.py       # 摘要版 HTML：8 种视觉组件混合排版（主流程）
+    ├── read_render.py       # 阅读版 HTML：逐字稿分段、时间戳导航（主流程）
     ├── decode_aac.py        # 辅助：纯 Python 解 AAC（降级用）
     └── mp4_extract_aac.py   # 辅助：mp4 抽 AAC（降级用）
 ```
