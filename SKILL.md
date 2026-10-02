@@ -51,7 +51,16 @@ python3 <skill_dir>/scripts/extract_audio.py <输入文件> <输出.wav>
 | `.mkv/.avi/.webm` | ✅ 同样走工具链 ffmpeg（`usr/bin/ffmpeg`）|
 
 > 判断：看退出码。0 = 拿到精确的 16k mono WAV；1 = 提取失败，必须走降级方案。
-> 历史备注：若 `usr/bin/ffmpeg` 缺失，按 install-clang.sh 同款思路安装（apt download-only + dpkg-deb 解包平移）。
+> 工具链现状（2026-10 已装好并验证）：`/data/user/0/com.dsharnessmobile.shell/files/usr/bin/ffmpeg`（Termux 8.1.3 解包平移版）。
+> `extract_audio.py` 会自动探测（PATH → 上述工具链路径），并且**找到后会先跑 `ffmpeg -version` 自检**——
+> bin 文件存在不代表依赖齐全，跑不起来会在 stderr 直接给出复装配方，不用再手工排查（上一轮就在这上面浪费了近 1 小时）。
+>
+> **工具链复装**（若 ffmpeg 缺失/损坏）：1) 准备 .deb——工作区 `ffmpeg_8.1.3_aarch64.deb`，依赖缺哪个用 termux 源
+> `apt download <包名>` 补哪个（完整依赖：fontconfig freetype fribidi harfbuzz libaom libass libbluray libdav1d
+> libmp3lame libopus libplacebo librav1e libsoxr libsrt libssh libtheora libvpx libwebp libx264 libx265 libxcb
+> libxml2 libzimg libzmq openssl rubberband svt-av1 zlib 等）；2) 逐个 `dpkg-deb -x <deb> <tmp>` 后把
+> `<tmp>/data/data/com.termux/files/usr/*` 合并拷贝到上述 usr；3) 验证命令必须带
+> `LD_LIBRARY_PATH=<usr>/lib LD_PRELOAD=<usr>/lib/libtermux-exec-ld-preload.so`（Android 直跑会缺 so）。
 
 ### 第 3 步：ASR 分块转写
 
@@ -67,6 +76,10 @@ SILICONFLOW_API_KEY=... python3 <skill_dir>/scripts/asr_transcribe.py <wav文件
 ```
 输出 `transcript.txt`。每片原始 JSON 落盘到 `<wav>.chunks/`，支持断点重跑；单片失败重试 3 次，全失败则退出码 2（已有结果仍写出）。
 
+> **复用/断点**：转写前先检查工作区是否已有本次输入对应的产物（上一轮中断的 `run_*` 目录里往往已有
+> `transcript.txt`/`transcript_calibrated.txt`/`analysis.json`/`.chunks/` 缓存），直接复用可跳过整段 ASR 与校正，
+> 从第 4a 步终审继续。`.chunks/` 缓存命中时重跑免费，可放心断点续跑。
+
 **`--chunk-seconds`（默认自动）**：不指定时按「总时长 ÷ workers」自动分块并夹取到 [30s, 240s]，使块数≈并发数、一轮并行跑完，比固定 120s 对大视频更省轮次。**`--workers`（默认 3）**：块级并发。实测 2:15 视频 2 块并发约 17-19s；免费档单次请求本身有 ~10s+ 固定开销且抖动 ±15s，块少并发足即可，不建议 >4。缓存机制与串行完全一致（已完成的块直接命中，重跑免费）。
 
 ### 第 3.5 步：机器校正预筛（可选，建议执行——省下 4a 的大部分时间）
@@ -80,7 +93,7 @@ python3 <skill_dir>/scripts/llm_calibrate.py <transcript.txt> <transcript_calibr
 - `transcript_calibrated.txt`——校正稿（保留 `[mm:ss]` 行结构，头部标注"预筛"）
 - `*.report.json`——逐条 `changes`（含 reason 与 high/low 置信度）+ 跨块术语表 `glossary`
 
-脚本内建防线（均实测过）：校正红线写死在 prompt（只改同音字/专名/数字规范/行内碎句，不改观点与数量级；不确定标 low 且正文保持原文）；**行级时间戳校验**——LLM 合并跨行碎句时会吞掉 `[mm:ss]`，校验失败自动进入单行修复二次调用；429/1302 限流长退避（默认并发 2）；**双泳道调度**（workers 条泳道内按块序号顺序执行，术语表沿泳道前滚，修复纯并发下专名前后不一致的竞态）；每块缓存可断点重跑，收尾自动清理旧 prompt 版本的残留缓存；模型不支持 `thinking` 字段时 400 自动去掉再试。15 分钟视频约 1-2 分钟跑完。
+脚本内建防线（均实测过）：校正红线写死在 prompt（只改同音字/专名/数字规范/行内碎句，不改观点与数量级；不确定标 low 且正文保持原文；**成语/典故/惯用语一律不改**——疑似时标 low 保留原文交终审，2026-10 曾实测模型把「从庐山里边跳了出来」错改成「从局中跳出」，已加 1b 红线）；**行级时间戳校验**——LLM 合并跨行碎句时会吞掉 `[mm:ss]`，校验失败自动进入单行修复二次调用；429/1302 限流长退避（默认并发 2）；**双泳道调度**（workers 条泳道内按块序号顺序执行，术语表沿泳道前滚，修复纯并发下专名前后不一致的竞态）；每块缓存可断点重跑，收尾自动清理旧 prompt 版本的残留缓存；模型不支持 `thinking` 字段时 400 自动去掉再试。15 分钟视频约 1-2 分钟跑完。
 
 `--max-chars`（默认 1500）：块越小失败粒度越小、并发利用率高、缓存复用多；`--workers`（默认 2）：免费档限流紧，不建议 >4。
 
@@ -172,11 +185,11 @@ ASR 原始输出常见问题：
 python3 <skill_dir>/scripts/render_html.py analysis.json transcript.txt [--clean] [--theme=light|dark]
 
 # 5.2 阅读版（逐字稿分段排版，时间戳导航）
-python3 <skill_dir>/scripts/read_render.py transcript.txt analysis.json [--theme=light|dark]
+python3 <skill_dir>/scripts/read_render.py transcript.txt analysis.json [--theme=light|dark] [--calibrated]
 ```
 
 - `render_html.py`：**摘要版**——8 种视觉组件混合排版，设计令牌系统，亮色默认/暗色可选，内容区宽 1080px。`--clean` 时不内嵌逐字稿。文件名自动 = `analysis.json` 的 `title`。
-- `read_render.py`：**阅读版**——逐字稿按段落分段（每段 ~50-150 字，无时间戳），16px 正文、1.85 行高、两端对齐，每 10 段自动加分隔线。顶部粘性工具栏：A-/A+ 字体大小（14/16/18/20/22/25px）、🔤 字体下拉菜单（宋体/黑体/仿宋/等线）、☀️ 亮/暗主题切换，偏好自动存 localStorage。文件名 = `<title>_阅读版.html`。
+- `read_render.py`：**阅读版**——逐字稿按段落分段（每段 ~50-150 字，无时间戳），16px 正文、1.85 行高、两端对齐，每 10 段自动加分隔线。顶部粘性工具栏：A-/A+ 字体大小（14/16/18/20/22/25px）、🔤 字体下拉菜单（宋体/黑体/仿宋/等线）、☀️ 亮/暗主题切换，偏好自动存 localStorage。文件名 = `<title>_阅读版.html`。`--calibrated`：优先用 `transcript_calibrated.txt`（校正稿）渲染，阅读体验更好；默认不加则用 ASR 原稿（存证）。引号/数字/强调词会自动加粗。
 - 两版都用同一 `title` 命名，保证产物成套。
 
 ### 第 6 步：交付
@@ -190,6 +203,7 @@ python3 <skill_dir>/scripts/read_render.py transcript.txt analysis.json [--theme
 - `*.chunks/` 目录（ASR 分块缓存，断点重跑后才需要）
 - `asr_*.log` 等调试日志
 - 调试过程中试错产生的临时脚本/输出（如 `test_*.pcm`、`input_*.wav` 系列）
+- **工具链安装残留**：确认 `/data/user/0/com.dsharnessmobile.shell/files/usr/bin/ffmpeg` 已能正常执行后，删除本次为装 ffmpeg 下载/解包的临时目录与 `.deb` 缓存（`debs/`、`alldebs/`、`ff_manual*`、`ff_extract*`、`ffroot/`、`dpkg_tools/`、散落的 `*.deb`、`ffprobe` 二进制、`aac_to_m4a*.py` 等试错脚本）。**保留**：已装进 usr 的工具链本身（不要动 `usr/bin/ffmpeg` 与其 libs），否则下次任务又要重装。
 
 **红线**：只删「本次任务」产生的文件，**绝不删输出目录里的历史文件**（其他任务的交付物 HTML、用户自己的资料）。`rm` 前先用 `ls`/`find -mtime` 或文件名特征确认归属，拿不准就问用户。目录占用巨大（数 GB 级）时更要逐个确认。
 

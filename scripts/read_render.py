@@ -6,7 +6,10 @@
 零外部资源、单文件可直接双击打开。
 
 用法:
-  python3 read_render.py transcript.txt [analysis.json] [--theme=light|dark] [--title "标题"]
+  python3 read_render.py transcript.txt [analysis.json] [--theme=light|dark] [--title "标题"] [--calibrated]
+
+--calibrated: 优先用 <同名>_calibrated.txt（llm_calibrate.py 的校正稿）渲染，阅读体验更好；
+              不存在时回退原稿。默认不加则用 ASR 原稿（存证）。
 
 输出:
   文件名自动 = <标题>_阅读版.html
@@ -71,7 +74,7 @@ def format_paragraph(text):
     
     return text
 
-def render_html(paragraphs, title, theme):
+def render_html(paragraphs, title, theme, source_note="所有文字来自原始转写"):
     parts = []
     # HTML head
     parts.append('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">')
@@ -149,11 +152,12 @@ footer p{margin:4px 0}
     for i, para in enumerate(paragraphs):
         if i > 0 and i % 10 == 0:
             parts.append('<div class="divider"></div>')
-        parts.append(f'<p class="para">{esc(para)}</p>')
+        # 先转义防注入，再应用高亮（引号/数字/强调词加粗）
+        parts.append(f'<p class="para">{format_paragraph(esc(para))}</p>')
     parts.append('</div></div>')
 
     # Footer
-    parts.append(f'<footer><div class="wrap"><p>由视频文案提取 skill 生成 · 所有文字来自原始转写</p>')
+    parts.append(f'<footer><div class="wrap"><p>由视频文案提取 skill 生成 · {source_note}</p>')
     parts.append(f'<p style="margin-top:8px">共 {len(paragraphs)} 段 · 单文件、无外部依赖</p>')
     parts.append('</div></footer>')
 
@@ -216,12 +220,24 @@ def main():
     ap.add_argument("--theme", choices=["light", "dark"], default="light")
     ap.add_argument("--title", default="", help="手动指定标题")
     ap.add_argument("--output", default="")
+    ap.add_argument("--calibrated", action="store_true",
+                    help="优先使用 <transcript 同名>_calibrated.txt（校正稿）渲染；不存在则回退原稿")
     args = ap.parse_args()
 
     if not os.path.isfile(args.transcript):
         print(f"ERROR: 找不到 {args.transcript}", file=sys.stderr)
         sys.exit(1)
-    with open(args.transcript, "r", encoding="utf-8") as f:
+
+    # 可选：优先用校正稿（阅读体验更好）；默认仍用 ASR 原稿作存证
+    src, source_note = args.transcript, "所有文字来自原始转写"
+    if args.calibrated:
+        base, ext = os.path.splitext(args.transcript)
+        cand = base + "_calibrated" + ext
+        if os.path.isfile(cand):
+            src, source_note = cand, "基于校正稿渲染（已修正 ASR 常见错别字/断句）"
+        else:
+            print(f"WARN: 未找到 {cand}，回退使用原稿", file=sys.stderr)
+    with open(src, "r", encoding="utf-8") as f:
         text = f.read()
 
     # Get title
@@ -238,13 +254,13 @@ def main():
         print("ERROR: transcript 为空或格式不正确", file=sys.stderr)
         sys.exit(1)
 
-    html_out = render_html(paragraphs, title, args.theme)
+    html_out = render_html(paragraphs, title, args.theme, source_note)
     out_path = args.output if args.output else f"{title}_阅读版.html"
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html_out)
     sz = os.path.getsize(out_path)
     print(f"OK: {out_path}  ({sz:,} bytes)")
-    print(f"   {len(paragraphs)} paragraphs, theme={args.theme}")
+    print(f"   {len(paragraphs)} paragraphs, theme={args.theme}, source={'calibrated' if args.calibrated else 'raw'}")
 
 if __name__ == "__main__":
     main()
