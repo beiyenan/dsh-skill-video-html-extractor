@@ -533,6 +533,23 @@ def main():
         sys.exit(1)
     with open(args.analysis, "r", encoding="utf-8") as f:
         data = json.load(f)
+    # 自检：调用统一 schema 校验器（发现 ERROR 直接拒绝渲染，保证任意调用方一致）
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    try:
+        import validate_analysis as VA
+        tx0 = ""
+        if args.transcript and os.path.isfile(args.transcript):
+            with open(args.transcript, encoding="utf-8") as f:
+                tx0 = f.read()
+        r = VA.validate(data, tx0)
+        for e in r.errors:
+            print(f"ERROR: {e}", file=sys.stderr)
+        for w in r.warns:
+            print(f"WARN : {w}", file=sys.stderr)
+        if r.errors:
+            sys.exit(1)
+    except ImportError:
+        pass
     transcript = ""
     if args.transcript and os.path.isfile(args.transcript):
         with open(args.transcript, "r", encoding="utf-8") as f:

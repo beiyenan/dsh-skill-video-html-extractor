@@ -1,236 +1,90 @@
 ---
 name: video-html-extractor
-description: 从用户上传的视频/音频文件提取文案（语音转文字），把转写内容结构化后生成两版单文件 HTML——摘要版（8 种视觉组件混合排版）与阅读版（逐字稿分段排版、时间戳导航），并按文案主题自动命名产物文件。适用于用户上传 .mp4/.mov/.mkv/.mp3/.wav/.m4a/.flac/.ogg 等音视频文件并要求「提取文案」「转成文字」「做成网页/HTML」「可视化」「整理一下内容」的场景。
+description: 从用户上传的音/视频文件提取文案（语音转文字），转成结构化后生成两版单文件 HTML——摘要版（8 种视觉组件混合排版）与阅读版（分段排版、字号/字体/主题可调），并按文案主题自动命名。适用用户上传 .mp4/.mov/.mkv/.mp3/.wav/.m4a/.flac/.ogg 并要求「提取文案」「转成文字」「做成网页/HTML」「可视化」「整理内容」的场景。
 ---
 
 # 视频文案提取 → 两版可视化 HTML
 
-把用户上传的音视频文件转成：
-1. 纯文本转写稿（`transcript.txt`）
-2. **摘要版** HTML（`render_html.py`）：8 种视觉组件混合排版，结构化展示章节/要点/金句，逐字稿可搜索
-3. **阅读版** HTML（`read_render.py`）：逐字稿按段落分段排版，时间戳导航，适合细读全文
+**一条 skill，一套流程，任何模型都能跑出一致的产物。** 你不需要自己编排步骤，也不要去读渲染器源码。
 
-结构化数据只维护一份 `analysis.json`，两个渲染器共用标题与数据，不各自为政。
+## 你要做的只有两件事
 
-## 何时使用
+1. 运行一次 `prepare`（脚本自动完成：提取音频 → ASR 转写 → 机器校正 → 生成骨架 `analysis.json` 和任务单 `TASK.md`）。
+2. 按 `TASK.md` 把 `analysis.json` 从骨架填成完整文档，跑 `validate_analysis.py` 自检到 **0 error**，再运行 `finish`（脚本自动校验 + 渲染两版 HTML）。
 
-- 用户上传音视频文件，要求提取语音内容 / 文案 / 字幕 / 转写
-- 用户要求把某段音视频「整理成网页」「做成 HTML」「可视化」「方便理解」
-- 用户要求产物按内容命名（如「根据讲的主题给文件命名」）
+除此之外的转写、校正、渲染、校验、清理，全部由脚本完成。**不要手改 transcript 或 HTML。**
 
-## 前置：环境变量
+## 环境变量 / 密钥
 
-| 变量 | 说明 | 默认 |
-|------|------|------|
-| `SILICONFLOW_API_KEY` | 硅基流动 API key（ASR） | 未设置时 `asr_transcribe.py` 自动读 `~/.dsh/secrets/siliconflow_api_key`（已配置，**无需向用户询问**）；两处都没有才向用户索取，且**不要写入任何持久文件** |
-| `SILICONFLOW_BASE_URL` | ASR 端点 | `https://api.siliconflow.cn/v1` |
-| `ZHIPU_API_KEY` | 智谱 API key（机器校正，可选） | 未设置时 `llm_calibrate.py` 自动读 `~/.dsh/secrets/zhipu_api_key`；没有则跳过 3.5 步，校正回退为主模型手工完成 |
-| `VIDEO2HTML_OUT` | 输出目录 | 输入文件同目录 |
+已配置，无需向用户询问，也不要写进任何持久文件：
 
-推荐 ASR 模型：`XingChenAGI/XingChenASR-V3.2-Ultra`（**免费**，会输出"嗯"等语气词，适合口语化内容；2026-09-30 用户核实后确定为默认）。备选：`Qwen/Qwen3-ASR-1.7B`（质量好但按秒计费）、`FunAudioLLM/SenseVoiceSmall`（按秒计费最低价）、`XingChenAGI/XingChenASR-Diarize-V3.0`（带说话人分离）。
+| 用途 | 自动读取 |
+|------|---------|
+| ASR（硅基流动） | `~/.dsh/secrets/siliconflow_api_key` |
+| 机器校正（智谱） | `~/.dsh/secrets/zhipu_api_key` |
 
-## 工作流
+默认 ASR 模型：`XingChenAGI/XingChenASR-V3.2-Ultra`（免费，适合口语化）。
+
+## 工作流（就这三步）
 
 ### 第 1 步：确认输入文件
 
-用户「上传」的文件通常落在工作区（`/data/data/.../workspaces/incoming/` 或用户指明路径）。确认文件存在、可读、大小合理（>50MB 时提醒会分块转写）。
+确认文件存在、可读。>50MB 时脚本会自动分块，无需你做任何事。
 
-### 第 2 步：提取/准备音频
-
-```bash
-python3 <skill_dir>/scripts/extract_audio.py <输入文件> <输出.wav>
-```
-
-脚本把音频重采样为 16kHz mono 16bit WAV（ASR 要求，且必须带 RIFF 头——裸 PCM 会 500）。
-
-| 输入格式 | 本环境（Android/DSH 工具链）表现 |
-|----------|--------------------------------------|
-| `.wav` | ✅ 纯 Python 重采样，直接可用 |
-| `.mp4/.mov`（含 AAC 音频） | ✅ 工具链 ffmpeg（`usr/bin/ffmpeg`）精确提取为 16k mono WAV；脚本自动注入 `LD_LIBRARY_PATH`+`LD_PRELOAD`（Android 直跑会缺 so/preload，已实测解决）。AAC 直传 ASR 不通（500），必须先解码 |
-| `.mp3/.m4a/.aac/.flac/.ogg` | ✅ 同样走工具链 ffmpeg 精确解码 |
-| `.mkv/.avi/.webm` | ✅ 同样走工具链 ffmpeg（`usr/bin/ffmpeg`）|
-
-> 判断：看退出码。0 = 拿到精确的 16k mono WAV；1 = 提取失败，必须走降级方案。
-> 工具链现状（2026-10 已装好并验证）：`/data/user/0/com.dsharnessmobile.shell/files/usr/bin/ffmpeg`（Termux 8.1.3 解包平移版）。
-> `extract_audio.py` 会自动探测（PATH → 上述工具链路径），并且**找到后会先跑 `ffmpeg -version` 自检**——
-> bin 文件存在不代表依赖齐全，跑不起来会在 stderr 直接给出复装配方，不用再手工排查（上一轮就在这上面浪费了近 1 小时）。
->
-> **工具链复装**（若 ffmpeg 缺失/损坏）：1) 准备 .deb——工作区 `ffmpeg_8.1.3_aarch64.deb`，依赖缺哪个用 termux 源
-> `apt download <包名>` 补哪个（完整依赖：fontconfig freetype fribidi harfbuzz libaom libass libbluray libdav1d
-> libmp3lame libopus libplacebo librav1e libsoxr libsrt libssh libtheora libvpx libwebp libx264 libx265 libxcb
-> libxml2 libzimg libzmq openssl rubberband svt-av1 zlib 等）；2) 逐个 `dpkg-deb -x <deb> <tmp>` 后把
-> `<tmp>/data/data/com.termux/files/usr/*` 合并拷贝到上述 usr；3) 验证命令必须带
-> `LD_LIBRARY_PATH=<usr>/lib LD_PRELOAD=<usr>/lib/libtermux-exec-ld-preload.so`（Android 直跑会缺 so）。
-
-### 第 3 步：ASR 分块转写
+### 第 2 步：prepare（全自动）
 
 ```bash
-SILICONFLOW_API_KEY=... python3 <skill_dir>/scripts/asr_transcribe.py <wav文件> <输出txt> \
-    [--model XingChenAGI/XingChenASR-V3.2-Ultra] [--chunk-seconds 自动] [--workers 3]
+python3 <skill_dir>/scripts/run_pipeline.py prepare <输入文件> [--workers 3]
 ```
 
-脚本把 WAV 按 `chunk-seconds` 切片，**每片重包 RIFF 头**（已验证：裸 PCM 会 500，带才行），逐片 POST 硅基流动 `/audio/transcriptions`，拼接为带时间戳的纯文本：
-```
-[00:00] 这是开头说的话
-[02:03] 第二段内容
-```
-输出 `transcript.txt`。每片原始 JSON 落盘到 `<wav>.chunks/`，支持断点重跑；单片失败重试 3 次，全失败则退出码 2（已有结果仍写出）。
+脚本依次做：提取 16k mono WAV → ASR 分块转写 → 智谱机器校正 → 生成骨架 + 任务单。**若工作区已有 `transcript.txt`/`transcript_calibrated.txt` 缓存会直接跳过对应步骤（命中缓存近零成本），且绝不覆盖已有的 `analysis.json`。** 退出码 `0` 成功；`1` 提取失败（看上方输出，若为解码问题走文末降级方案）；`3/4` 校正 key 不可用（跳过校正，你在填 analysis.json 时手工完成即可）。
 
-> **复用/断点**：转写前先检查工作区是否已有本次输入对应的产物（上一轮中断的 `run_*` 目录里往往已有
-> `transcript.txt`/`transcript_calibrated.txt`/`analysis.json`/`.chunks/` 缓存），直接复用可跳过整段 ASR 与校正，
-> 从第 4a 步终审继续。`.chunks/` 缓存命中时重跑免费，可放心断点续跑。
+完成后它会打印：骨架路径、任务单路径、以及低置信度校正项清单。骨架未填完时 validate 报 ERROR 是**预期现象**，不要慌。
 
-**`--chunk-seconds`（默认自动）**：不指定时按「总时长 ÷ workers」自动分块并夹取到 [30s, 240s]，使块数≈并发数、一轮并行跑完，比固定 120s 对大视频更省轮次。**`--workers`（默认 3）**：块级并发。实测 2:15 视频 2 块并发约 17-19s；免费档单次请求本身有 ~10s+ 固定开销且抖动 ±15s，块少并发足即可，不建议 >4。缓存机制与串行完全一致（已完成的块直接命中，重跑免费）。
+### 第 3 步：填 analysis.json（这是你唯一要动的）
 
-### 第 3.5 步：机器校正预筛（可选，建议执行——省下 4a 的大部分时间）
+1. **读** `TASK.md`（任务单）+ `transcript.txt`（内容来源）+ `transcript_calibrated.txt`（校正稿，正文以它为准）+ `examples/analysis.example.json`（**结构照抄它，别猜字段名**）。
+2. 用 write 工具**整体覆盖** `analysis.json`，保留骨架里的正确键名，只填内容：
+   - `title`：具体、可检索、≤30 字。禁用泛词（转写/文案/内容整理/transcript/未命名/原始文件名）。例：「耶鲁死亡课：直面死亡才能活明白」。
+   - `tone` / `summary` / `hero_facts`(3–6 个记忆点数字) / `sections`(6–10) / `key_takeaways`(5–10，带 [mm:ss] 引用) / `conclusion` / `entities` / `footer.calibration`。
+   - `sections` 的 `type` 按内容本质选并配对该字段：`timeline`(时序)/`compare`(对比)/`pair`(痛点解法)/`architecture`(结构)/`flow`(流向)/`quote`(金句)/`list`(清单)/`default`(论述)。**不要全堆成 default。** 具体字段形状看 `examples/analysis.example.json` 与 TASK.md。
+3. **红线**：只改高置信度错；不改观点/数字量级/不加事实；金句原样加引号；**所有数字必须能在 transcript.txt 找到出处，禁止编造**。
+4. **自检到 0 error**（照 TASK.md 末尾的命令）：
+   ```bash
+   python3 <skill_dir>/scripts/validate_analysis.py analysis.json --transcript transcript.txt
+   ```
+   它只报 ERROR（不让过）和 WARN（建议修）。照提示改，重跑，直到 ERROR 全消。
+
+### 第 4 步：finish（全自动）
 
 ```bash
-python3 <skill_dir>/scripts/llm_calibrate.py <transcript.txt> <transcript_calibrated.txt> \
-    [--model glm-4.7] [--workers 2] [--max-chars 2500] [--report report.json]
+python3 <skill_dir>/scripts/run_pipeline.py finish <输入文件> [--theme light|dark]
 ```
 
-用智谱 `glm-4.7`（2025-09 实测的免费档；key 读 `~/.dsh/secrets/zhipu_api_key`）对转写稿做**高置信度预校正**，产出：
-- `transcript_calibrated.txt`——校正稿（保留 `[mm:ss]` 行结构，头部标注"预筛"）
-- `*.report.json`——逐条 `changes`（含 reason 与 high/low 置信度）+ 跨块术语表 `glossary`
+先校验（0 error 才渲染），再生成两版 HTML（文件名自动 = title）：
+- **摘要版** `<title>.html`：8 种视觉组件混合，内嵌可搜索逐字稿（ASR 原稿，存证）。
+- **阅读版** `<title>_阅读版.html`：校正稿分段排版，A-/A+ 字号、4 款字体、亮暗主题，偏好存 localStorage。
 
-脚本内建防线（均实测过）：校正红线写死在 prompt（只改同音字/专名/数字规范/行内碎句，不改观点与数量级；不确定标 low 且正文保持原文；**成语/典故/惯用语一律不改**——疑似时标 low 保留原文交终审，2026-10 曾实测模型把「从庐山里边跳了出来」错改成「从局中跳出」，已加 1b 红线）；**行级时间戳校验**——LLM 合并跨行碎句时会吞掉 `[mm:ss]`，校验失败自动进入单行修复二次调用；429/1302 限流长退避（默认并发 2）；**双泳道调度**（workers 条泳道内按块序号顺序执行，术语表沿泳道前滚，修复纯并发下专名前后不一致的竞态）；每块缓存可断点重跑，收尾自动清理旧 prompt 版本的残留缓存；模型不支持 `thinking` 字段时 400 自动去掉再试。15 分钟视频约 1-2 分钟跑完。
+### 第 5 步：交付 + 清理
 
-`--max-chars`（默认 1500）：块越小失败粒度越小、并发利用率高、缓存复用多；`--workers`（默认 2）：免费档限流紧，不建议 >4。
+用 `present` 交付摘要版 + 阅读版 + `transcript.txt`（用户只要部分则按需）。然后删除本次中间产物，只留交付物：`*.html`、`transcript.txt`、`analysis.json`。要删的：`*.wav`、`*.chunks/`、`*_calibrated.txt.calib_cache/`、日志、调试脚本、为装 ffmpeg 下载的 `.deb` 与临时目录。**保留**已装进 `usr/bin/ffmpeg` 的工具链本身。
 
-退出码：`0` 成功｜`2` 个别块失败（该块保留原文，不影响使用）｜`3` 无余额/无资源包｜`4` 鉴权失败。**退出码 3/4 不要死磕**：告知用户 key 不可用，4a 回到纯手工流程。
+**红线**：只删本次任务产生的文件；删前用 `ls`/文件名特征确认归属，拿不准就问用户；绝不删输出目录里的历史文件。
 
-### 第 4 步：文案校正 + 结构化理解
+## 交付前自查清单（照抄，过一遍即可）
 
-**由你（agent）负责校正与理解**，分两阶段工作。
+- 校验器已 0 error（title 非泛词、字段名/类型/枚举正确、数字能回溯到原文）。
+- 阅读版可正常打开、字号/主题按钮可用；两版均为单文件、无外部依赖。
+- 术语校正说明已写在 `footer.calibration`。
 
-#### 4a. 校正终审（优先基于 3.5 的产物）
+## 降级方案（提取失败时）
 
-**有 3.5 产物时**：只需读 `report.json` 逐条终审 `changes`——accept（保留）/ reject（按原文从校正稿回改），low 条目重点核对，`glossary` 并入 `entities` 候选。实体 grep 自检仍要做（对象改为校正稿）。主模型不再逐字重写全文。
-
-**没有 3.5 产物时**（key 不可用或用户未配置）：读取 `transcript.txt` 全文，按下表逐段手工修正，在脑内/笔记完成即可（`transcript.txt` 原文保持不动作为存证）。
-
-ASR 原始输出常见问题：
-
-| 问题类型 | 例子（本项目实测） | 处理 |
-|----------|------------------|------|
-| 专有名词听错 | 《巨翅死亡》→《拒斥死亡》(Becker, *The Denial of Death*) | 有把握就改，并把正确写法记入 `entities` |
-| 中文数字混排 | "PHIL幺七六"→PHIL 176、"四百五十五美元"→455 美元 | 结构化稿统一为阿拉伯数字 |
-| 跨分块断句 | 块边界把一句话劈成两半、产生"高。出整整九倍"式碎句 | 按上下文缝合 |
-| 同音字/口误 | "确知"可能是"怕死"的误听 | **不确定就不改**，保留原文；只有语境+常识双重支持才修正 |
-| 重复口癖 | "这个这个"、"就是说"高频重复 | 结构化稿省略，逐字稿保留 |
-
-**校正红线**：
-- 只改「高置信度」的错；改错的代价大于不改。
-- 修正不改观点、不改数字量级、不添加原文没有的事实。
-- 双轨原则：HTML 正文/要点用校正后表述；**逐字稿区永远展示 ASR 原文**，供用户回溯核对。
-
-#### 4b. 结构化理解（基于校正后的理解，写入 `analysis.json`）
-
-- `title`：**必须根据转写全文的实际主题拟定**——读完全部内容后概括「这到底在讲什么」，产出具体、可检索的标题（≤30字），并直接用于产物文件命名。硬要求（`render_html.py` 会强制校验，泛词直接拒绝渲染）：
-  - ❌ 禁止泛称：「转写」「视频文案」「内容整理」「transcript」「未命名」及其组合；
-  - ❌ 禁止直接拿原始视频文件名当标题；
-  - ✅ 正确示例：「耶鲁死亡课：直面死亡才能活明白」「2026 年中端手机选购指南」——有主题词、有观点或范围，别人扫一眼文件名就知道内容；
-  - 若内容跨多主题，取占比最大的主线主题，不要罗列。标题同时是 HTML 的 `<title>`/`<h1>` 和输出文件名。
-- `summary`：3-5 句话概括全文
-- `sections`：按内容逻辑切分，每项 `{heading, content(要点列表), key_points}`
-- `key_takeaways`：5-10 条最重要的结论/数字/建议（带引用原文时间戳）
-- `entities`：出现的人名/产品/地名/专有名词
-- `timeline`（可选）：如果内容有明显时间顺序，给 `{time, event}` 列表
-- `tone`：语气判断（教程/访谈/演讲/新闻/…）
-
-#### 4b-附. 叙事骨架选择
-
-不要按原文顺序搬运，按「读者最容易理解」的顺序重排。三种骨架：
-- **A. 时间线骨架**：有成长/演化过程 → 起点 → 转折 → 危机 → 破局 → 当前状态
-- **B. 问题-解法骨架**：方法论 → 痛点1/解法1、痛点2/解法2…
-- **C. 总-分-总骨架**：观点类 → 结论先行 → 论据 → 回扣结论
-
-提炼口诀：**痛点 → 解法 → 认知**。给每章编号（01、02…），一句话副标题说明这章讲什么。
-
-#### 4b-附2. 内容本质→视觉组件映射（关键一步）
-
-**不同的内容类型必须用不同的视觉组件**，这是「排版可视化」和「分段搬运」的分水岭。`render_html.py` 根据 `analysis.json` 中的字段自动选择组件：
-
-| 内容本质 | 自动使用的组件 | analysis.json 字段 |
-|---------|-------------|------------------|
-| 全局概览数字 | **数据卡组**（大数字+小标签） | `hero_facts[]` |
-| 有先后顺序的历程 | **时间线**（竖线+圆点，按状态变色：蓝/绿/橙/红） | `timeline[]` 或 `sections[].type=timeline` |
-| 前后对比/好坏对照 | **对比卡**（左右两栏，✕/✓ 列表） | `sections[].type=compare` |
-| 痛点与解法 | **配对卡**（标签：痛点=红，解法=绿）+ 引语 | `sections[].type=pair` |
-| 系统结构/组织关系 | **架构图**（顶部节点+连接线+三列卡片） | `sections[].type=architecture` |
-| 流程/资金/数据流向 | **流程图**（节点+箭头，起止节点高亮） | `sections[].type=flow` |
-| 核心观点句 | **金句卡**（左侧色条+加大字号） | `conclusion.quote` 或 `sections[].type=quote` |
-| 可执行要点清单 | **清单行**（序号图标+标题+说明） | `key_takeaways[]` 或 `sections[].type=list` |
-| 普通论述段落 | 标准 section（章节头+编号+段落） | `sections[]` 默认 |
-
-判断技巧：**先问"这段内容本质上是哪种关系"**——时序？对比？结构？流程？关系决定组件。绝不要把所有内容都堆成 `<p>`。
-
-#### 4b-附3. 内容处理红线
-
-| 允许 | 禁止 |
-|------|------|
-| 删口语赘词、重复、语气词 | 改变原意、增删事实 |
-| 合并同义表述 | 把"约谈"美化成"沟通" |
-| 提炼小标题 | 给原文没有的结论 |
-| 校正明显错别字（并标注） | 静默改写、不留痕 |
-| 金句原样引用（加引号） | 篡改引语字词 |
-| 用表格/组件重组信息 | 把不确定的信息写成确定 |
-
-金句处理：原文中"说白了/其实/说到底"后面那句往往就是金句，原样引用。数字处理：所有数字都提到 hero 数据卡，数字是最强的记忆锚点。术语校正标注：文末用一行小字说明，如"转录中'艺人公司'按上下文校正为'一人公司'"。
-
-### 第 5 步：生成 HTML（两版）
-
-```bash
-# 5.1 摘要版（8 种组件混合排版）
-python3 <skill_dir>/scripts/render_html.py analysis.json transcript.txt [--clean] [--theme=light|dark]
-
-# 5.2 阅读版（逐字稿分段排版，时间戳导航）
-python3 <skill_dir>/scripts/read_render.py transcript.txt analysis.json [--theme=light|dark] [--calibrated]
-```
-
-- `render_html.py`：**摘要版**——8 种视觉组件混合排版，设计令牌系统，亮色默认/暗色可选，内容区宽 1080px。`--clean` 时不内嵌逐字稿。文件名自动 = `analysis.json` 的 `title`。
-- `read_render.py`：**阅读版**——逐字稿按段落分段（每段 ~50-150 字，无时间戳），16px 正文、1.85 行高、两端对齐，每 10 段自动加分隔线。顶部粘性工具栏：A-/A+ 字体大小（14/16/18/20/22/25px）、🔤 字体下拉菜单（宋体/黑体/仿宋/等线）、☀️ 亮/暗主题切换，偏好自动存 localStorage。文件名 = `<title>_阅读版.html`。`--calibrated`：优先用 `transcript_calibrated.txt`（校正稿）渲染，阅读体验更好；默认不加则用 ASR 原稿（存证）。引号/数字/强调词会自动加粗。
-- 两版都用同一 `title` 命名，保证产物成套。
-
-### 第 6 步：交付
-
-用 `present` 把**摘要版 HTML + 阅读版 HTML + transcript.txt** 一起交付（若用户只要其中部分，按用户要求）。用户嫌风格不合时：改主题用 `--theme=dark`，改摘要结构只动 `analysis.json`，不要手改 HTML。用户要纯文字直接贴 `transcript.txt`。
-
-### 第 7 步：清理中间产物（交付后必做）
-
-交付完成后，**删除本次产生的全部中间文件**，只保留交付物（`*.html`、`transcript.txt`、`analysis.json`）。常见中间产物：
-- `*.wav` / `*.pcm` / `*.mp3` 等音频中间文件（提取、重采样、切片调试的产物）
-- `*.chunks/` 目录（ASR 分块缓存，断点重跑后才需要）
-- `asr_*.log` 等调试日志
-- 调试过程中试错产生的临时脚本/输出（如 `test_*.pcm`、`input_*.wav` 系列）
-- **工具链安装残留**：确认 `/data/user/0/com.dsharnessmobile.shell/files/usr/bin/ffmpeg` 已能正常执行后，删除本次为装 ffmpeg 下载/解包的临时目录与 `.deb` 缓存（`debs/`、`alldebs/`、`ff_manual*`、`ff_extract*`、`ffroot/`、`dpkg_tools/`、散落的 `*.deb`、`ffprobe` 二进制、`aac_to_m4a*.py` 等试错脚本）。**保留**：已装进 usr 的工具链本身（不要动 `usr/bin/ffmpeg` 与其 libs），否则下次任务又要重装。
-
-**红线**：只删「本次任务」产生的文件，**绝不删输出目录里的历史文件**（其他任务的交付物 HTML、用户自己的资料）。`rm` 前先用 `ls`/`find -mtime` 或文件名特征确认归属，拿不准就问用户。目录占用巨大（数 GB 级）时更要逐个确认。
-
-**交付前自查清单**（每次渲染完过一遍）：
-- [ ] 所有数字与原文一致，没有编造
-- [ ] 没有漏掉原文的关键因果链
-- [ ] 每段内容都选对了组件（时序→时间线，对比→对比卡…）
-- [ ] 颜色全部走 `var()`，没有散落的写死颜色
-- [ ] 已检查浅色底上是否有浅色文字（对比度）
-- [ ] 已在浏览器里打开确认渲染，无报错
-- [ ] 手机宽度（≤820px）下单列可读
-- [ ] 阅读版时间戳导航可点击跳转
-- [ ] 单文件、无外部依赖
-- [ ] 术语校正/免责说明已加在文末
-
-## 降级方案（音频提取失败时）
-
-1. 告知用户：本环境无法解码该容器的音频轨（列出尝试过的格式）。
-2. 给用户三个选择：
-   a. 手动用任何工具（手机相册自带「录音」转文字、剪映导出音频、在线转码站）把音频导成 `.wav`/`.mp3`，上传后重新走第 3 步起。
-   b. 若文件其实有外挂字幕（.srt/.vtt），直接让我读字幕文件，跳过 ASR。
-   c. 放弃，只要我帮整理已有文本。
-3. **不要**在无法获取真实语音时假装完成了转写。
+1. 告知用户无法解码该容器音频轨。
+2. 给三个选择：a. 用户手动导成 `.wav`/`.mp3` 再传（从第 2 步起）；b. 有外挂字幕（.srt/.vtt）直接读字幕跳过 ASR；c. 放弃转写，只整理已有文本。
+3. **不要**在拿不到真实语音时假装完成转写。
 
 ## 边界
 
-- 不处理需登录/付费墙的视频 URL（本 skill 只接受用户提供的本地文件）。
-- 不做语音合成、不做视频剪辑。
-- 转写语言以音频实际语言为准；ASR 模型中文效果最好，小语种（藏/彝/苗等）可能不准，需告知用户。
-- 不做语音识别之外的臆造：所有数字/引语必须能在 `transcript.txt` 找到出处。
+- 只处理用户提供的本地文件；不做需登录/付费墙的 URL。
+- 不做语音合成、视频剪辑。转写语言以音频实际语言为准；中文效果最好，小语种可能不准需告知用户。
+- 所有数字/引语必须能在 `transcript.txt` 找到出处。
