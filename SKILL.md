@@ -215,3 +215,19 @@ python3 <skill_dir>/scripts/run_pipeline.py finish <输入文件> [--theme dark|
 - 只处理用户提供的本地文件；不做需登录/付费墙的 URL。
 - 不做语音合成、视频剪辑。转写语言以音频实际语言为准；中文效果最好，小语种可能不准需告知用户。
 - 所有数字/引语必须能在 `transcript.txt` 找到出处。
+
+## 推送到 GitHub（token 已预配，随时可推）
+
+本 skill 的 Git 仓库：https://github.com/beiyenan/dsh-skill-video-html-extractor（分支 `main`）。
+
+**推送方式（一条命令，无需再要 token）：**
+```bash
+bash <skill>/scripts/git_push.sh            # 推当前分支到 main
+bash <skill>/scripts/git_push.sh main       # 指定分支
+```
+
+**安全约定（改推送相关代码务必遵守）：**
+- GitHub PAT 存在 **`~/.dsh/secrets/github_token`**（chmod 600，位于 git 仓库树**之外**，`git ls-files` 永远看不到它），由 `git_push.sh` 在推送瞬间读取，**绝不写进 `.git/config`、不写进任何 commit、不留在工作区**。
+- `remote origin` 只存**无 token** 的干净 HTTPS 地址（`https://github.com/...`）。
+- 推送脚本 `git_push.sh` 内部用一次性带 token 的 URL 调 `git push`，推完即弃；`main` 是跟踪分支。
+- `.gitignore` 已忽略 `*_token`/`*_key`/`*.pem` 等敏感模式作兜底；任何情况下都不应把 secrets 内容提交进仓库。
