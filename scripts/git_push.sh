@@ -53,7 +53,12 @@ else
     exit 2
   fi
   echo "→ 推 $BRANCH → $CLEAN_URL"
-  git push -u "$AUTH_URL" "$BRANCH"
+  # 注意：绝不能对 $AUTH_URL 用 -u（会把带 token 的 URL 写进 branch.<b>.remote 造成泄漏）。
+  # 推送到一次性 auth URL，然后用命名的 origin remote 设 upstream，config 里只留干净地址。
+  git push "$AUTH_URL" "$BRANCH"
+  if ! git config "branch.${BRANCH}.remote" >/dev/null 2>&1; then
+    git branch --set-upstream-to="origin/${BRANCH}" "$BRANCH" 2>/dev/null || true
+  fi
 fi
 
 # 4) 推完确认 remote 仍是 clean（未残留 token）
