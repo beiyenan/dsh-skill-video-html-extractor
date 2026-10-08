@@ -61,9 +61,11 @@ else
   fi
 fi
 
-# 4) 推完确认 remote 仍是 clean（未残留 token）
+# 4) 推完同步本地 tracking ref（推送用的是一次性 auth URL，不会更新 refs/remotes/origin/<b>，
+#    需用干净的 origin 做个只读 fetch 让 git status 不再误报 ahead）。顺带确认 remote 干净。
 if git remote get-url origin | grep -q 'github_pat'; then
   echo "WARN: origin 含 token，正在清理…" >&2
   git remote set-url origin "$CLEAN_URL"
 fi
+git fetch origin --quiet 2>/dev/null || true
 echo "✓ 已推送（token 未写入 .git/config）"
