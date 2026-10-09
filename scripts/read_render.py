@@ -83,6 +83,8 @@ def format_paragraph(text, highlights=None, used=None):
 def render_html(paragraphs, title, theme, source_note="所有文字来自原始转写", highlights=None):
     used_hl = set()  # 跨段落去重：每个精选短语全文只高亮首次出现
     parts = []
+    # 字数统计：全部正文段落合并后的字符数（含标点、数字、字母；不含时间戳与空行）
+    char_count = sum(len(p) for p in paragraphs)
     # HTML head；--theme light 时给 <html> 打上 data-theme="light"（CSS 选择器 [data-theme="light"] 挂在 html 元素上才生效）
     html_attrs = ' lang="zh-CN"' + (' data-theme="light"' if theme == "light" else '')
     parts.append(f'<!DOCTYPE html><html{html_attrs}><head><meta charset="UTF-8">')
@@ -217,7 +219,7 @@ footer p{margin:4px 0}
 
     # Footer
     parts.append(f'<footer><div class="wrap"><p>由视频文案提取 skill 生成 · {source_note}</p>')
-    parts.append(f'<p style="margin-top:8px">共 {len(paragraphs)} 段 · 单文件、无外部依赖</p>')
+    parts.append(f'<p style="margin-top:8px">共 {len(paragraphs)} 段 · 正文 {char_count} 字 · 单文件、无外部依赖</p>')
     parts.append('</div></footer>')
 
     # JS
@@ -325,7 +327,8 @@ def main():
         sys.exit(1)
 
     html_out = render_html(paragraphs, title, args.theme, source_note, highlights)
-    out_path = args.output if args.output else f"{title}_阅读版.html"
+    _safe = re.sub(r'[\\/:*?"<>|]', '_', title).strip()
+    out_path = args.output if args.output else f"{_safe}_阅读版.html"
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html_out)
     sz = os.path.getsize(out_path)
