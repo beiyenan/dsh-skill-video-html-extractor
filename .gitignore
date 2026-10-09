@@ -5,3 +5,5 @@ __pycache__/
 *_token
 *_key
 .id_rsa
+# 本机专用，不推送 GitHub
+network_calibrate.py
