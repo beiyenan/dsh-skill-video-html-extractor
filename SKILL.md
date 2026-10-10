@@ -20,7 +20,8 @@ python3 <skill>/scripts/run_pipeline.py prepare <附件绝对路径> --out /stor
 python3 <skill>/scripts/run_pipeline.py prepare input.mp4
 
 # 3. 终审 GLM 草稿 analysis.json（读校正稿核对事实/数字/高亮，edit 修订；草稿缺失时才按 TASK.md 手填）
-#    + 一次 web_search 批量校准 entities（<2min 全中文实体可跳过）
+#    + 网络校准：python3 <skill>/scripts/run_pipeline.py calibrate <输入文件> --out <工作区>
+#      （Tavily 自动批量核实 entities；无 key 时静默跳过，可改用 web_search 手动核实）
 
 # 4. 自检到 0 error（不带 --transcript 时自动探测校正稿做溯源基准）
 python3 <skill>/scripts/validate_analysis.py analysis.json
@@ -37,7 +38,7 @@ python3 <skill>/scripts/validate_analysis.py analysis.json
 ## 你要做的只有三件事
 
 1. 运行一次 `prepare`（脚本自动完成：提取音频 → ASR 转写 → 机器校正 → **GLM 起草 `analysis.json`** → 生成任务单 `TASK.md`）。起草把最重的生成钉在固定的 glm-4.7 上，**会话模型切换不影响主耗时**；起草失败/无 key 时自动回退为空骨架，由你手填。
-2. **终审草稿**（不是从零写）：按 `TASK.md` 读校正稿、核对事实/数字/高亮逐字性、edit 修订；**填完做一轮网络校准**（见「网络校准」），跑 `validate_analysis.py` 自检到 **0 error**（仅 WARN 可留，不阻塞渲染），再运行 `finish`（脚本自动校验 + 按 DESIGN-SPEC 渲染两版 HTML + 按 title 重命名校正稿 + 自动清理中间产物，原始逐字稿 `transcript.txt` 一并删除，仅保留校正稿）。
+2. **终审草稿**（不是从零写）：按 `TASK.md` 读校正稿；**先跑 `run_pipeline.py calibrate` 做一轮网络校准**（Tavily API 自动批量核实 entities，会自动回填 footer，见「网络校准」）；再核对事实/数字/高亮逐字性、edit 修订；跑 `validate_analysis.py` 自检到 **0 error**（仅 WARN 可留，不阻塞渲染），再运行 `finish`（脚本自动校验 + 按 DESIGN-SPEC 渲染两版 HTML + 按 title 重命名校正稿 + 自动清理中间产物，原始逐字稿 `transcript.txt` 一并删除，仅保留校正稿）。
    - **快路径**：若视频 < 2 分钟且 `entities` 里全是常见中文名（抖音/今日头条/小红书等，ASR 误写率极低），web_search 可以只做 1 次验证搜索（确认没把「快手」写成「头条」这类近义混用），不必逐条查；有英文音译词或冷门人名/产品名才需要批量搜索。
 3. 交付前按「交付前自查清单」过一遍。
 
@@ -73,21 +74,26 @@ python3 <skill_dir>/scripts/run_pipeline.py prepare <输入文件> [--workers 3]
 ### 第 3 步：终审 analysis.json（草稿已就绪，这是你唯一要动的）
 
 1. **读** `TASK.md`（任务单）+ `transcript_calibrated.txt`（校正稿，正文以它为准）。`analysis.json` 通常已是 GLM 草稿；**只有草稿是空骨架时**才需要照 `examples/analysis.example.json` 从零填。
-2. 用 edit 工具**针对性修订**草稿（不要无脑整体重写）：
+2. **先跑网络校准，再动手编辑**（顺序重要：calibrate 会自动回填 footer.calibration，之后脚本在 finish 前不再写 analysis.json，你的 edit 就不会撞上脚本写入）：
+   ```bash
+   python3 <skill>/scripts/run_pipeline.py calibrate <输入文件> [--out 输出目录]
+   ```
+   脚本（`network_calibrate.py`）自动把 entities 按类别分组批量调 **Tavily API**（Key 读 skill 根目录 `.tavily_key`，其次 `~/.dsh/secrets/tavily_api_key`、环境变量 `TAVILY_API_KEY`），写 `calibration_report.json`；若 `footer.calibration` 还是骨架占位符则自动回填核实摘要（**已有人工内容则不覆盖**）。**之后你只需审读报告里的「未确认」项**（脚本只确认不改写）：确实写错的按「『ASR 原文』→『官方写法』（出处：URL）」补进 `footer.calibration` 并同步替换正文。**校准只改名词写法，不改观点、数字量级。** 若无 Tavily key 或搜索失败，脚本静默跳过（exit 0），此时回退为旧路径——用 web_search 手动核实（按类别分组、一次 2–4 条 queries）。注：`finish` 会再跑一次 calibrate（`--reuse` 复用报告，不重复扣次数），所以忘记单独跑也不漏。**生活/教程类视频的 entities 多为口语称谓（菜名、料名、俗称），搜不到官方写法是常态——未确认项保留原文即可，不必逐条深究。**
+3. 用 edit 工具**针对性修订**草稿（不要无脑整体重写）：
    - `title`：具体、可检索、≤30 字。禁用泛词（转写/文案/内容整理/transcript/未命名/原始文件名）。例：「耶鲁死亡课：直面死亡才能活明白」。
    - `tone` / `summary` / `hero_facts`(3–6 个记忆点数字) / `sections`(6–10) / `key_takeaways`(5–10，带 [mm:ss] 引用) / `conclusion` / `entities` / `footer.calibration`。
    - `reader_highlights`：8–15 条阅读版金色高亮短语，**逐字摘自校正稿**（4–30 字）。只挑含金量最高的：核心概念定义、关键结论、金句、重要数字表述；禁止「首先/所以/但是」类过渡词。每条全文仅在首次出现处高亮。校验器会 WARN 报原文找不到的条目。
    - **`summary` 必须写「核心观点」，不是「内容摘要」**。3–5 句话，只保留：① 文案的中心论点（1 句，可加引号原文）；② 支撑论点的 2–3 个关键数字/数据；③ 一句行动指令或结论。**不要写「博主用 X 经历切入」「后来他读到 Y」「由此他给出 Z」「结尾邀请观众 W」这类叙事流水账**——视频讲了什么、谁说的、怎么转折的，全都不进 summary，这些留给 `sections` 和 `key_takeaways` 去讲。读者打开 HTML 第一眼看到的 summary 是「文案本身在讲什么」，不是「视频怎么讲的」。例：原文核心是「人是需要间歇性堕落的，精力管理比时间管理更重要」，那 summary 就写「间歇性堕落是自救：人就像弹簧……老教授 5+2 / 6+1……有效工作时间只有 4 小时，用 20% 有效时间干 20% 最重要的事」，不写「博主傻白用高三经历切入、崩溃后读了一篇文章」。
-   - `sections` 的 `type` 按内容本质选并配对该字段：`timeline`(时序)/`compare`(对比)/`pair`(痛点解法)/`architecture`(结构)/`flow`(流向)/`quote`(金句)/`list`(清单)/`default`(论述)。**不要全堆成 default。** 具体字段形状看 `examples/analysis.example.json` 与 TASK.md。
-3. **网络校准（必填一步）**：填完 `entities` 后，**用 web_search 批量核实专有名词的官方写法**——把 `entities` 按类别分组，**一次 web_search 调用放 2–4 条 queries 同时搜**（如「作家名 + 代表作」「公司 + 产品名」「人名 + 身份」），不要一个词一行单独搜；搜不到官方写法的再补一轮。要核实：
-   - **公司/团队名**（快手/字节/腾讯/阿里/OpenAI/谷歌…），确认视频里提到的是哪家。
-   - **产品/模型名**（如「可林」→「可灵 Kling」、「C Dance」→「Seedance」），ASR 对英文/音译词误写率极高，必须按官方英文名或官方中文名回填。
-   - **人名**（主播/科学家/企业家），确认拼音或汉字写法。
-   - **地名/机构名**。
-   把校准结果写进 `footer.calibration`（格式：`「ASR 原文」→「官方写法」（出处：URL 或"官方名"）`），并同步替换正文中所有出现该词的位置。**校准只改名词写法，不改观点、数字量级。** 如果 web_search 返回结果与你的先验知识冲突，**以搜索到的官方页面为准**，在 calibration 里标注「网络校准推翻先验」。
+   - `sections` 的 `type` 按内容本质选并配对该字段：`timeline`(时序)/`compare`(对比)/`pair`(痛点解法)/`architecture`(结构)/`flow`(流向)/`quote`(金句)/`list`(清单)/`default`(论述)。**不要全堆成 default。** 具体字段形状看 `examples/analysis.example.json` 与 TASK.md。**v2 选择指引（R 系列）**：
+     - **R1 叙事钩子前置**：原稿若含真实人物事件/案例故事，必须在 Hero 之后、理论章节之前用 `timeline` 呈现"开篇故事"（让读者先产生疑问再进机制）；无叙事素材可跳过。这是 v1 产出最常漏用的——强叙事被压进 list/default，丢了故事钩子。
+     - **R2 数据支撑独立成节**：支撑中心论点的调查/研究数据（非首屏 hero_facts）集中一个 `default` 或 `compare` 章节；强对比数据（如长期 61% vs 一次性 19%）用 `compare` 呈现，**不得拆成两张平铺卡**。
+     - **R3 量化机制可视化**：原文带倍数/参照点/增减对比等"可计算"机制时，用 section 的 `bars` 字段（`[{label,value,text?,tone?}]` + `bar_note?`）渲染纯 CSS 条形图（`.bar-chart`），数字仍须可回溯原文。
+     - **R4 全文去重**：同一金句/数据/结论全页只出现一次。sections 讲"机制与故事"，takeaways 只留一句式"结论条目"（带时间戳但不复述细节）。校验器对重复金句/重复数据点/sections↔takeaways 逐字复述给 WARN。
+     - **R5 解法与机制挂钩**：若解法从机制推导，解法区显式标注对应机制（如"帮急不帮穷 ← 享乐适应/参照点"），形成"机制→解法"闭环。
+     - **pair 使用前提收紧**：仅当痛与解真实一一对应时用 `pair`；纯解释性内容不得伪装成"解法"（v1 的痛点3条+伪解法3条平铺即反例）。
 4. **红线**：只改高置信度错；不改观点/数字量级/不加事实；金句原样加引号；**所有数字必须能在 transcript.txt 找到出处，禁止编造**（校验器兼容中文数字：原文「二零一九」= JSON「2019」，「三家」= 3，不会误报）；**不要把原文说法「雅化」成原文没有的短语**（校验器查不出，交差前人工抽查 `summary`/`key_takeaways`/`quote` 里的短语，拿不准回 `transcript.txt` 搜）。
 5. **通顺度**：转写稿可能含 ASR 把开场音乐/噪音误输出的句首杂字（如「等」）。终审校正稿时若该字使句首不通且无实义，应删除以恢复通顺。这与「拒绝雅化」不冲突——雅化是改写实义措辞，删除句首无义杂字仅是修正 ASR 噪音。
-5. **自检到 0 error**（照 TASK.md 末尾的命令；不带 --transcript 时自动探测校正稿做溯源基准）：
+6. **自检到 0 error**（照 TASK.md 末尾的命令；不带 --transcript 时自动探测校正稿做溯源基准）：
    ```bash
    python3 <skill_dir>/scripts/validate_analysis.py analysis.json
    ```
@@ -116,7 +122,7 @@ python3 <skill_dir>/scripts/run_pipeline.py finish <输入文件> [--theme dark|
 ```
 
 先校验（仅 ERROR 拒渲染，WARN 放行），再按 `DESIGN-SPEC.md` 的设计规范生成两版 HTML：
-- **摘要版** `<title>_摘要版.html`：8 种视觉组件混合。**不含逐字稿**（校正稿以 `<title>_校正稿.txt` 独立文件交付，不再内嵌到 HTML）。**默认深色主题**（DESIGN-SPEC 核心目标：深色主题 + 渐变红金强调 + 毛玻璃卡片 + 入场/悬浮/背景粒子动效 + 响应式网格）。**导航栏右上角带明暗主题切换按钮**（太阳/月亮图标，点一下换主题，偏好存 `localStorage` 键 `dsh_theme`，下次打开沿用）。
+- **摘要版** `<title>_摘要版.html`：8 种视觉组件混合（可挂 `.bar-chart` 条形图，R3）。**不含逐字稿**（校正稿以 `<title>_校正稿.txt` 独立文件交付，不再内嵌到 HTML）。**默认深色主题**（DESIGN-SPEC 核心目标：深色主题 + 渐变红金强调 + 毛玻璃卡片 + 入场/悬浮/背景粒子动效 + 响应式网格）。**导航栏右上角带明暗主题切换按钮**（太阳/月亮图标，点一下换主题，偏好存 `localStorage` 键 `dsh_theme`，下次打开沿用）。**导航为每个主要章节提供锚点**（v2 导航完整性），**页脚校正说明与实体列表默认折叠**（`<details><summary>`，点开可见；生成声明不折叠）。
 - **阅读版** `<title>_阅读版.html`：校正稿分段排版，A-/A+ 字号、4 款字体、亮暗主题，偏好存 localStorage。**默认深色**；`finish` 的 `--theme light` 同时作用于摘要版与阅读版（两版初始主题一致），页内按钮仍可随时切换。**阅读版高亮（`.para strong`）颜色：暗色主题金黄色 `#f5c518`，亮色主题天蓝色 `#00a6e6`**（CSS 用 `html[data-theme="light"] .para strong{color:#00a6e6}` 覆盖；只改高亮文字，不改标题/分隔线的 `--grad-b` 渐变）。
 
 **render 后自动重命名**：`finish` 渲染完两版 HTML 后，将 `transcript_calibrated.txt` 重命名为 `<title>_校正稿.txt`（文件名与 HTML 保持同一前缀）。原始逐字稿 `transcript.txt` 不重命名，而是由清理步骤自动删除。
@@ -161,6 +167,8 @@ python3 <skill_dir>/scripts/run_pipeline.py finish <输入文件> [--theme dark|
 - **主题切换按钮（§3.1.1）**：两版导航栏最右都有圆形毛玻璃按钮，点一下换明暗、偏好写 localStorage（摘要版 `dsh_theme`、阅读版 `theme`）；深色默认、`--theme light` 回落亮色。切换后不会出现文字消失（渐变标题带 `@supports` fallback）。
 - 术语校正说明已写在 `footer.calibration`。
 - **compare 组件无双图标**：摘要版里 compare 章节的 `<li>` 不应包含 `ico-mark` span（CSS 已用 `::before` 画 ✕/✓，HTML 里再塞 SVG 会双图标）。grep 验证：`grep -c ico-mark *.html` 应为 0；若 >0 说明渲染器回归，改 render_html.py 的 `render_compare`。
+- **全文去重（R4）**：重复金句/重复数据点已消除；`sections` 与 `key_takeaways` 无逐字复述（校验器会 WARN 提示，见 `check_dedup`）。
+- **导航完整性 / 死锚点**：导航为每个主要章节提供锚点（hero + 各 section + 要点 + 金句）；渲染后自检所有 `href="#..."` 都有对应 `id`，无死链接（缺失为 ERROR 拒渲染）。section 多时移动端锚点条横向滚动（§5.3），非隐藏。
 - **速度自查**：本次流程里 `web_search` 调用 ≤ 2 次（按实体类别分组批量搜）；没有重复 `ls` 确认同一目录；`prepare`/`finish` 各只跑 1 次（命中缓存时跳过）；`present` 只调 1 次、把 3 件交付物一次性传齐。若违反，下次按「最短路径速查」6 条命令直接照抄。
 
 ## 设计规范（DESIGN-SPEC）
@@ -172,9 +180,11 @@ python3 <skill_dir>/scripts/run_pipeline.py finish <输入文件> [--theme dark|
 | 主题 | 深色默认（底色 `#1a1a2e`）；`--theme light` 回落亮色 |
 | 强调色 | 红 `#e94560` + 金 `#f5c518` 渐变；价值/数字用金色 |
 | 卡片 | Glassmorphism：`rgba(255,255,255,0.06)` 背景 + `backdrop-filter:blur(10px)` + `rgba(255,255,255,0.1)` 细边框 + `border-radius:16px` + `0 8px 32px rgba(0,0,0,0.3)` 阴影 |
-| 动效 | `fadeInUp` 入场（stagger 0.1s 增量）+ `float` 背景粒子（6 个，`z-index:-1`）+ `pulse` 流程箭头 + `bounce` 滚动指示 |
+| 动效 | `fadeInUp` 入场（stagger 0.1s 增量）+ `float` 背景粒子（6 个，`z-index:-1`）+ `pulse` 流程箭头 + `bounce` 滚动指示 + `barGrow` 条形生长（R3，`transform:scaleX`） |
+| 组件 | 8 种 section + **条形对比 `.bar-chart`（R3）**：挂任意 section 的 `bars` 字段，纯 CSS 色块条形，数值用 `--w` 驱动 `transform:scaleX()`（只用 transform/opacity，遵守 §9.2） |
 | 主题切换 | 导航栏最右 38×38 圆形毛玻璃按钮（§3.1.1）：摘要版太阳/月亮 SVG 挂 `body[data-theme]`、localStorage 键 `dsh_theme`；阅读版太阳 SVG 挂 `html[data-theme]`、localStorage 键 `theme`；两版默认深色、`--theme light` 回落亮色 |
-| 响应式 | 768px 断点：卡片单列、流程图纵向（箭头 90°）、导航隐藏链接（主题切换按钮保留贴右） |
+| 导航 | **导航完整性（v2）**：为每个主要 section 提供锚点（hero + 各章节 + 要点 + 金句），锚点文字用章节 heading；无死链接（渲染后自检 `href→id`，缺失 ERROR 拒渲染） |
+| 响应式 | 768px 断点：卡片单列、流程图纵向（箭头 90°）、**导航链接横向滚动（非隐藏，主题按钮保留贴右）**、条形图标签转上方 |
 | 字体 | 系统字体栈（`-apple-system, "PingFang SC", "Microsoft YaHei"…`），零外部加载 |
 | 约束 | 单文件零依赖、纯原生 HTML/CSS/JS、语义化标签、动画只用 `transform`/`opacity` |
 

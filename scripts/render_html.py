@@ -13,7 +13,7 @@
   transcript.txt 参数仅为兼容保留（校验需要），不再内嵌进 HTML。
 """
 
-import argparse, json, sys, html, os
+import argparse, json, sys, html, os, re
 
 # ── 泛词校验 ──
 BAN_WORDS = ["转写", "视频文案", "内容整理", "transcript", "未命名", "视频转写", "文本整理"]
@@ -226,9 +226,25 @@ body[data-theme="light"] .std-card:hover{box-shadow:0 16px 40px rgba(22,32,58,.1
 .takeaway .ico.purple{background:rgba(167,139,250,.12);color:var(--purple);border-color:rgba(167,139,250,.3)}
 .takeaway h4{font-size:15px;font-weight:700;margin-bottom:4px}
 .takeaway p{color:var(--muted);font-size:14px}
-/* 页脚 */
+/* v2 R3 量化机制条形对比（纯 CSS 色块条形；仅 transform/opacity 动效，遵守 DESIGN-SPEC 4.2） */
+.bar-chart{display:flex;flex-direction:column;gap:13px;margin-top:16px;padding:22px 24px;background:var(--card);border:1px solid var(--card-border);border-radius:var(--radius);box-shadow:var(--shadow);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.bar-row{display:grid;grid-template-columns:120px 1fr 48px;align-items:center;gap:12px}
+.bar-row .bar-label{font-size:13px;font-weight:700;color:var(--muted);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar-track{height:20px;border-radius:8px;background:var(--card2);overflow:hidden}
+.bar-fill{display:block;height:100%;border-radius:8px;background:linear-gradient(90deg,var(--grad-a),var(--grad-b));transform:scaleX(0);transform-origin:left center;animation:barGrow .9s cubic-bezier(.2,.7,.3,1) forwards}
+.bar-row.green .bar-fill{background:linear-gradient(90deg,var(--accent2),var(--grad-b))}
+.bar-row.red .bar-fill{background:linear-gradient(90deg,var(--danger),var(--grad-c))}
+.bar-row.warn .bar-fill{background:linear-gradient(90deg,var(--grad-b),#ff8c00)}
+.bar-row.purple .bar-fill{background:linear-gradient(90deg,var(--purple),var(--accent2))}
+.bar-val{font-size:14px;font-weight:800;color:var(--grad-b);text-align:left;white-space:nowrap}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(calc(var(--w)/100))}}
+.bar-note{margin-top:12px;font-size:12.5px;color:var(--dim);border-top:1px dashed var(--card-border);padding-top:10px}
+/* 页脚（v2：校正说明与实体列表默认折叠进 <details><summary>，生成声明不折叠） */
 footer{padding:32px 0 48px;border-top:1px solid var(--card-border);color:var(--dim);font-size:13px;text-align:center}
 footer p{margin:4px 0}
+footer details{margin:10px auto 0;max-width:720px;text-align:left;background:var(--card);border:1px solid var(--card-border);border-radius:var(--radius);padding:10px 14px}
+footer summary{cursor:pointer;font-weight:700;color:var(--muted);font-size:13px;user-select:none}
+footer details .details-body{margin-top:8px;color:var(--dim);font-size:12.5px;line-height:1.7}
 /* 响应式（DESIGN-SPEC §5：768px 断点，卡片单列、流程纵向箭头 90°） */
 @media(max-width:768px){
   .grid2{grid-template-columns:1fr}
@@ -248,9 +264,13 @@ footer p{margin:4px 0}
   .flow{flex-direction:column;align-items:stretch}
   .flow .arr{transform:rotate(90deg);margin:2px auto}
   .flow .node{max-width:none}
-  /* 导航栏移动端：隐藏中间链接，只留 logo + 主题按钮，按钮贴右 */
-  nav.site-nav{padding:10px 16px}
-  nav.site-nav .nav-links{display:none}
+  /* v2 R3 条形图移动端：标签转上方，避免定宽溢出（保持可读） */
+  .bar-row{grid-template-columns:1fr 48px}
+  .bar-row .bar-label{grid-column:1/-1;text-align:left}
+  /* 导航栏移动端（v2）：保留主要锚点可横向滚动，主题按钮保留贴右 */
+  nav.site-nav{padding:10px 16px;gap:10px}
+  nav.site-nav .nav-links{display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;flex:1}
+  nav.site-nav .nav-links a{white-space:nowrap;flex-shrink:0}
 }
 """
 
@@ -355,6 +375,9 @@ def render_section(sec, idx):
         parts.append(render_list_section(sec))
     else:
         parts.append(render_default_section(sec))
+    # v2 R3：section 若带 bars 字段，额外追加量化机制条形图（可挂在任意 type 上）
+    if sec.get("bars") or sec.get("bar_chart"):
+        parts.append(render_barchart(sec))
     parts.append('</div></section>')
     return "\n".join(parts)
 
@@ -504,6 +527,43 @@ def render_default_section(sec):
         p.append('</ul></div>')
     return "\n".join(p)
 
+def render_barchart(sec):
+    """v2 R3 量化机制条形对比（纯 CSS 色块条形）。可挂在任意 section 上（bars 字段）。
+    字段：bars=[{label,value,text?,tone?}], bar_note?。value 用于宽度（相对最大项归一化），text 为展示文案。"""
+    bars = sec.get("bars") or sec.get("bar_chart") or []
+    if not bars:
+        return ""
+    items = []
+    for b in bars:
+        if isinstance(b, dict):
+            items.append({
+                "label": b.get("label", ""),
+                "value": b.get("value", 0) if isinstance(b.get("value"), (int, float)) else 0,
+                "text": b.get("text", ""),
+                "tone": b.get("tone", ""),
+            })
+        elif isinstance(b, (int, float)):
+            items.append({"label": "", "value": b, "text": f"{b:g}", "tone": ""})
+    if not items:
+        return ""
+    mx = max((i["value"] for i in items), default=1)
+    if mx <= 0:
+        mx = 1
+    p = ['<div class="bar-chart">']
+    for it in items:
+        v = it["value"]
+        pct = v / mx * 100
+        tc = it.get("tone", "")
+        cls = f"bar-row {tc}" if tc else "bar-row"
+        disp = it["text"] if it["text"] else (f"{v:g}" if v else "")
+        p.append(f'<div class="{cls}"><span class="bar-label">{esc(it["label"])}</span>'
+                 f'<span class="bar-track"><span class="bar-fill" style="--w:{pct:g}"></span></span>'
+                 f'<span class="bar-val">{esc(disp)}</span></div>')
+    if sec.get("bar_note"):
+        p.append(f'<div class="bar-note">{esc(sec["bar_note"])}</div>')
+    p.append('</div>')
+    return "\n".join(p)
+
 def render_key_takeaways(data):
     tks = data.get("key_takeaways", [])
     if not tks:
@@ -541,13 +601,17 @@ def render_conclusion(data):
     return "\n".join(p)
 
 def render_footer(data):
+    # v2 §3.1-6：校正说明与实体列表默认折叠（<details><summary>），点开可见；生成声明不折叠。
     p = ['<footer><div class="wrap">']
     cal = data.get("footer", {}).get("calibration", "")
-    if cal:
-        p.append(f'<p><b>校正说明：</b>{esc(cal)}</p>')
     ents = data.get("entities", [])
-    if ents:
-        p.append(f'<p><b>实体：</b>{"、".join(esc(e) for e in ents)}</p>')
+    if cal or ents:
+        p.append('<details><summary>校正与术语说明</summary><div class="details-body">')
+        if cal:
+            p.append(f'<p><b>校正说明：</b>{esc(cal)}</p>')
+        if ents:
+            p.append(f'<p><b>实体：</b>{"、".join(esc(e) for e in ents)}</p>')
+        p.append('</div></details>')
     p.append('<p style="margin-top:12px">由视频文案提取 skill 生成 · 校正稿以随附 txt 文件交付 · 所有数字与引语来自原始转写</p>')
     p.append('</div></footer>')
     return "\n".join(p)
@@ -557,10 +621,18 @@ def render_html(data, theme):
     css = ALL_CSS
     if theme == "light":
         css = css + LIGHT_CSS_OVERRIDE
-    # 导航锚点：hero / 各 section + 右上角主题切换按钮（按钮放在 nav-links 外，靠 flex:1 推到最右）
+    # 导航锚点（v2 §3.3 导航完整性）：hero + 每个 section + 要点 + 金句，全指向真实存在的 id。
+    # 每个 section 用其 heading 做锚点文字（无 heading 时回退为「章节 N」），禁止出现死链接。
     nav_links = [("hero", "首屏")]
-    if data.get("sections"):
-        nav_links.append(("sec0", "目录"))
+    for i, sec in enumerate(data.get("sections", [])):
+        if isinstance(sec, dict) and sec.get("heading"):
+            nav_links.append((f"sec{i}", sec["heading"]))
+        else:
+            nav_links.append((f"sec{i}", f"章节 {i+1}"))
+    if data.get("key_takeaways"):
+        nav_links.append(("takeaways", "要点"))
+    if (data.get("conclusion") or {}).get("cards"):
+        nav_links.append(("quotes", "金句"))
     nav_html = '<nav class="site-nav"><div class="nav-logo">视频文案 · 可视化</div>'
     nav_html += '<div class="nav-links">'
     for nid, nlabel in nav_links:
@@ -620,7 +692,17 @@ def render_html(data, theme):
         '</script>'
     )
     parts.append('</body></html>')
-    return "\n".join(parts)
+    html_out = "\n".join(parts)
+    # v2 §3.3 / §五：死锚点自检（导航 href 指向的 id 必须存在于文档中，否则 ERROR 拒渲染）。
+    # 从最终 HTML 里收集全部 id 与全部 # 内部锚点，逐一核对。
+    _ids = set(re.findall(r'\bid="([^"]+)"', html_out))
+    _hrefs = set(re.findall(r'href="#([^"]+)"', html_out))
+    _dead = sorted(_hrefs - _ids)
+    if _dead:
+        for d in _dead:
+            print(f"ERROR: 导航死链接 `#{d}` 在文档中无对应 id（导航必须指向真实存在的章节锚点）。", file=sys.stderr)
+        sys.exit(1)
+    return html_out
 
 def main():
     ap = argparse.ArgumentParser(description="analysis.json → 单文件可视化 HTML（摘要版，不含逐字稿）")
@@ -662,7 +744,8 @@ def main():
     # 逐字稿一律不内嵌（用户要求：摘要版不带逐字稿）；逐字稿以独立 txt 文件交付
     html_out = render_html(data, args.theme)
     title = data.get("title", "output")
-    out_path = args.output if args.output else f"{title}_摘要版.html"
+    _safe = re.sub(r'[\\/:*?"<>|]', '_', title).strip()
+    out_path = args.output if args.output else f"{_safe}_摘要版.html"
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html_out)
     sz = os.path.getsize(out_path)

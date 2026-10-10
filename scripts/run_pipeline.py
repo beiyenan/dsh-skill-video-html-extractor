@@ -37,6 +37,24 @@ def out_dir_for(inp, out):
         return os.path.abspath(out)
     return os.path.dirname(os.path.abspath(inp)) or os.path.abspath(".")
 
+def read_tavily_key(od=""):
+    """Tavily key 读取链（按顺序，命中即返回）：工作区/命令行 → skill 根目录 → ~/.dsh/secrets → 环境变量。
+
+    Key 放在 skill 根目录的 `.tavily_key`（被 .gitignore 忽略，不进 Git；但 dsh-backup 把
+    skills/ 整目录打进 zip，所以换机/重装时随 skill 一起恢复）。
+    """
+    candidates = []
+    if od:
+        candidates.append(os.path.join(od, ".tavily_key"))
+    candidates += [".tavily_key", os.path.join(SCRIPT_DIR, "..", ".tavily_key"),
+                   os.path.join(SECRETS, "tavily_api_key")]
+    for cand in candidates:
+        if os.path.isfile(cand):
+            with open(cand, encoding="utf-8") as f:
+                return f.read().strip()
+    return os.environ.get("TAVILY_API_KEY", "")
+
+
 def read_secret(name):
     p = os.path.join(SECRETS, name)
     if os.path.isfile(p):
@@ -111,17 +129,25 @@ def build_task(od, transcript_path, calib_path, report_path, example_path):
 
 ## 终审清单（按序做，别跳步）
 1. 读校正稿：`{os.path.basename(calib_path)}`（正文以它为准）。
-2. 读 `analysis.json` 草稿，逐项核对：
+2. **先跑网络校准（此时 analysis.json 还没被你动过，脚本写 footer 不会和你的编辑冲突）**：
+   `python3 {os.path.join(SCRIPT_DIR, 'run_pipeline.py')} calibrate <输入文件> --out {od}`
+   Tavily 批量核实 entities 并写 calibration_report.json；footer.calibration 为骨架时自动回填，
+   已有人工内容不覆盖。**跑完这一步后，脚本在 finish 前不会再写 analysis.json，之后你随便 edit。**
+   你只需审读报告里的「未确认」项，确实写错的按「『原文』→『官方写法』（出处）」补录。
+   无 Tavily key 时静默跳过，可改用 web_search 手动核实。
+   （生活/教程类视频的 entities 多为口语称谓——如烧烤料名、炭名——搜不到官方写法是常态，
+   未确认项保留原文即可，不必逐条深究。）
+3. 读 `analysis.json` 草稿，逐项核对：
    - **事实/数字**：每个数字都要能在校正稿里找到出处，删掉或改正编造的；
    - **reader_highlights**：每条必须逐字摘自校正稿（含标点），不在原文的改写或删除；
    - **结构与类型**：sections 的 type 是否贴内容（时序→timeline、对比→compare…），不像话的改；
    - **表达质量**：title 是否具体可检索、summary 是否抓住主线、金句引用是否原样。
    用 edit 工具做针对性修订；只有草稿整体不合格才用 write 整体重写。
-3. 低置信度校正项（report.json 里的 low，需你终审判断 accept/reject；high 项已由脚本应用）：
+4. 低置信度校正项（report.json 里的 low，需你终审判断 accept/reject；high 项已由脚本应用）：
 {render_low(low_items)}
-4. 机器确认的术语表（entities 应沿用这些写法）：
+5. 机器确认的术语表（entities 应沿用这些写法）：
 {render_glossary(glossary)}
-5. 补上 `footer.calibration`：一句话说明本次校正接受了哪些术语修正（如「'EB9鲁'→伊壁鸠鲁」）。
+6. 补上 `footer.calibration`：在网络校准回填的内容**前面**追加一句人工说明（本次校正接受了哪些术语修正，如「'EB9鲁'→伊壁鸠鲁」），不要删掉已回填的网络校准记录。
 
 ## 红线
 - 只改高置信度错；改错代价大于不改。不确定就保留原文。
@@ -159,6 +185,22 @@ def render_glossary(gl):
     if not gl:
         return "  （无）"
     return "\n".join(f"  {k} ← {v}" for k, v in gl.items())
+
+def cmd_calibrate(args):
+    """网络校准：把 analysis.json 的 entities 分组 → Tavily 批量搜索 → 写 calibration_report.json；
+    若模型尚未填写 footer.calibration，自动回填（保护人工已写内容）。"""
+    inp = ensure_input(args.inp)
+    od = out_dir_for(inp, args.out)
+    ap = os.path.join(od, "analysis.json")
+    if not nonempty(ap):
+        print(f"ERROR: 找不到 {ap}。请先跑 prepare 并填好 analysis.json。", file=sys.stderr); sys.exit(1)
+    print(f"== 网络校准 ==  读取 {ap} 的 entities，Tavily API")
+    rc = run([sys.executable, os.path.join(SCRIPT_DIR, "network_calibrate.py"), ap,
+              "--out", od, "--batch", str(args.batch), "--append", "--reuse"], cwd=od)
+    if rc != 0:
+        print("ERROR: 网络校准失败，请检查上方输出", file=sys.stderr); sys.exit(rc)
+    print("== 下一步 ==  按 TASK.md 审读校准结果，自检到 0 error 后运行 finish")
+
 
 def cmd_prepare(args):
     inp = ensure_input(args.inp)
@@ -244,6 +286,7 @@ def cleanup_intermediates(od, inp):
         os.path.join(od, "transcript.txt"),
         os.path.join(od, "transcript_calibrated.txt.calib_cache"),
         os.path.join(od, "report.json"),
+        os.path.join(od, "calibration_report.json"),
         os.path.join(od, "TASK.md"),
         os.path.join(od, "analysis.json"),
     ]
@@ -264,11 +307,26 @@ def cmd_finish(args):
     inp = ensure_input(args.inp)
     od = out_dir_for(inp, args.out)
     tx = os.path.join(od, "transcript.txt")
+    # 兜底：transcript.txt 可能已被上次 finish 清理，改用校正稿（含已重命名的 *_校正稿.txt）
+    if not os.path.isfile(tx):
+        import glob as _g
+        _cands = [os.path.join(od, "transcript_calibrated.txt")] + \
+                 sorted(_g.glob(os.path.join(od, "*_校正稿.txt")))
+        tx = next((c for c in _cands if os.path.isfile(c)), tx)
     ap = os.path.join(od, "analysis.json")
     example = os.path.join(SCRIPT_DIR, "..", "examples", "analysis.example.json")
 
     if not nonempty(ap):
         print(f"ERROR: 找不到 {ap}。请先跑 prepare 生成骨架并填好。", file=sys.stderr); sys.exit(1)
+
+    # 网络校准：核实 entities 官方写法。若模型已手写 footer.calibration 则保留原文（不覆盖），
+    # 否则用核实结果自动回填；报告不存在时发起搜索，存在时直接复用（不再重复扣 API 次数）。
+    print("== 网络校准 ==")
+    rc = run([sys.executable, os.path.join(SCRIPT_DIR, "network_calibrate.py"), ap,
+              "--out", od, "--append", "--reuse"], cwd=od)
+    if rc != 0:
+        print("WARN: 网络校准失败，继续渲染（footer.calibration 留空）", file=sys.stderr)
+
     # 终检：ERROR 拒绝渲染；WARN 仅提示、放行。
     # 数字溯源优先用校正稿（机器校正改过的数字在 raw 里查不到属正常）；
     # 渲染时摘要版仍内嵌原始稿作存证（见下方渲染部分）。
@@ -289,7 +347,8 @@ def cmd_finish(args):
     print(f"== 渲染阅读版（校正稿）==")
     r2 = run([sys.executable, os.path.join(SCRIPT_DIR, "read_render.py"), tx, ap, "--theme", args.theme, "--calibrated"], cwd=od)
     if r1 != 0 or r2 != 0:
-        print("WARN: 有渲染器报错，请检查上方输出。", file=sys.stderr)
+        print("ERROR: 渲染失败，已中止（不清理中间产物，便于排查后重跑 finish）。", file=sys.stderr)
+        sys.exit(1)
 
     # 按 title 重命名校正稿（交付时文件名与 HTML 一致）
     with open(ap, encoding="utf-8") as f:
@@ -300,6 +359,18 @@ def cmd_finish(args):
         if os.path.isfile(tx_calib):
             os.rename(tx_calib, new_calib)
             print(f"→ 校正稿已重命名: {os.path.basename(new_calib)}")
+            # 校正稿头部的「原始存证见 transcript.txt」在下方清理后会变成死引用，改写为最终说明
+            try:
+                with open(new_calib, encoding="utf-8") as f:
+                    lines = f.read().splitlines(keepends=True)
+                for i, ln in enumerate(lines[:5]):
+                    if ln.startswith("# 原始存证见"):
+                        lines[i] = "# 原始 ASR 逐字稿已随中间产物清理；本文件为校正后的唯一存证。\n"
+                        break
+                with open(new_calib, "w", encoding="utf-8") as f:
+                    f.writelines(lines)
+            except OSError:
+                pass
 
     # 默认自动清理本次中间产物；--keep-cache 时保留（断点重跑 prepare 可命中缓存）
     if args.keep_cache:
@@ -348,6 +419,11 @@ def main():
     pa.add_argument("--no-draft", action="store_true",
                     help="跳过 GLM 起草 analysis.json（主模型从骨架手填，慢但完全自控）")
     pa.set_defaults(fn=cmd_prepare)
+    pc = sub.add_parser("calibrate", help="Tavily 批量核实 analysis.json 的 entities 并回填 footer.calibration")
+    pc.add_argument("inp")
+    pc.add_argument("--out", default="")
+    pc.add_argument("--batch", type=int, default=3, help="每组实体数（默认 3）")
+    pc.set_defaults(fn=cmd_calibrate)
     pf = sub.add_parser("finish", help="校验+渲染两版+默认清理中间产物")
     pf.add_argument("inp")
     pf.add_argument("--out", default="")

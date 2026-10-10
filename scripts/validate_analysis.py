@@ -154,6 +154,25 @@ def check_section(r, sec, idx):
                 check_str(r, c, "source", required=False)
     elif stype == "list":
         check_str_list(r, sec, "items", required=True)
+    # v2 R3：bars 字段可挂在任意 type 上（量化机制条形图）；value 须为数字、label 为字符串
+    bars = sec.get("bars")
+    if bars is not None:
+        if not isinstance(bars, list) or not bars:
+            r.err(f"sections[{idx}].bars 应为非空数组（R3 条形图）")
+        else:
+            for i, b in enumerate(bars):
+                if isinstance(b, dict):
+                    check_str(r, b, "label", required=True)
+                    v = b.get("value")
+                    if not isinstance(v, (int, float)):
+                        r.err(f"sections[{idx}].bars[{i}].value 应为数字，实为 {type(v).__name__}：{v!r}")
+                    check_str(r, b, "text", required=False)
+                    bt = b.get("tone", "")
+                    if bt not in FACT_TONES:
+                        r.err(f"sections[{idx}].bars[{i}].tone=`{bt}` 非法。允许：{sorted(FACT_TONES - {''})}")
+                elif not isinstance(b, (int, float)):
+                    r.err("sections[%d].bars[%d] 应为 {label,value,tone?} 对象或数字，实为 %s" % (idx, i, type(b).__name__))
+        check_str(r, sec, "bar_note", required=False)
 
 def check_timestamp(r, key_takeaways):
     # key_takeaways 里若有 [mm:ss] 时间戳，必须是合法格式（尽力而为，非强断）
@@ -169,6 +188,138 @@ def check_timestamp(r, key_takeaways):
             mm, ss = int(m.group(1)), int(m.group(2))
             if ss >= 60:
                 r.warn(f"key_takeaways[{i}] 时间戳 `[{mm:02d}:{ss:02d}]` 秒≥60，可能手滑。")
+
+
+def _norm_text(s):
+    """归一化文本用于去重比对：去空白/标点/引号/时间戳，小写。"""
+    if not isinstance(s, str):
+        return ""
+    s = re.sub(r'\[[0-9:]+\]', '', s)
+    s = re.sub(r'[\s「」“”\"\'…·,，。；;：:！!？?、.`()（）\-—…]', '', s)
+    return s.lower()
+
+
+def _collect_quotes(data):
+    """收集全页所有"金句/引语"文本（conclusion.cards + quote section cards + pair 的 quote），
+    用于全文去重 WARN（R4：同一金句全页只出现一次）。"""
+    out = []
+    concl = data.get("conclusion") or {}
+    for c in (concl.get("cards") or []):
+        if isinstance(c, dict) and c.get("text"):
+            out.append(c["text"])
+    for sec in (data.get("sections") or []):
+        if not isinstance(sec, dict):
+            continue
+        if sec.get("type") == "quote":
+            for c in (sec.get("cards") or []):
+                if isinstance(c, dict) and c.get("text"):
+                    out.append(c["text"])
+        elif sec.get("type") == "pair":
+            for k in ("pains", "fixes"):
+                for it in (sec.get(k) or []):
+                    if isinstance(it, dict) and it.get("quote"):
+                        out.append(it["quote"])
+    return out
+
+
+def _collect_section_blobs(data):
+    """把每个 section 渲染出的可读文本拼成一个 blob，用于 sections↔takeaways 复述检测。"""
+    blobs = []
+    for sec in (data.get("sections") or []):
+        if not isinstance(sec, dict):
+            blobs.append(""); continue
+        head = sec.get("heading", "")
+        parts = [head, sec.get("desc", "")]
+        st = sec.get("type", "default")
+        if st == "timeline":
+            for it in sec.get("items", []):
+                if isinstance(it, dict):
+                    parts += [str(it.get("year","")), it.get("title",""), it.get("desc","")]
+        elif st == "compare":
+            parts += [sec.get("old_title",""), sec.get("new_title","")]
+            for k in ("old","new"):
+                for it in sec.get(k, []):
+                    if isinstance(it, str): parts.append(it)
+        elif st == "pair":
+            for k in ("pains","fixes"):
+                for it in sec.get(k, []):
+                    if isinstance(it, dict):
+                        parts += [it.get("title",""), it.get("desc",""), it.get("quote","")]
+        elif st == "architecture":
+            parts += [sec.get("node_title",""), sec.get("node_sub",""), sec.get("bottom_note","")]
+            for c in sec.get("cols", []):
+                if isinstance(c, dict):
+                    parts += [c.get("role",""), c.get("title","")]
+                    for it in c.get("items", []):
+                        if isinstance(it, str): parts.append(it)
+                    parts.append(c.get("nope",""))
+        elif st == "flow":
+            for s in sec.get("steps", []):
+                if isinstance(s, dict):
+                    parts += [s.get("title",""), s.get("sub","")]
+        elif st == "list":
+            for it in sec.get("items", []):
+                if isinstance(it, dict):
+                    parts += [it.get("title",""), it.get("desc","")]
+                elif isinstance(it, str):
+                    parts.append(it)
+        else:  # default
+            for it in (sec.get("content") or []):
+                if isinstance(it, dict):
+                    parts += [it.get("title",""), it.get("desc","")]
+                elif isinstance(it, str):
+                    parts.append(it)
+            for it in (sec.get("key_points") or []):
+                if isinstance(it, str): parts.append(it)
+        blobs.append(_norm_text(" ".join(x for x in parts if x)))
+    return blobs
+
+
+def check_dedup(r, data):
+    """v2 R4：全文去重——重复金句 / 重复数据点 / sections↔takeaways 复述，都给 WARN。"""
+    # 重复金句：同一句话在全页出现 ≥2 次
+    quotes = _collect_quotes(data)
+    seen = {}
+    for q in quotes:
+        nq = _norm_text(q)
+        if not nq:
+            continue
+        if nq in seen:
+            r.warn(f"重复金句：`{q}` 在全页出现 ≥2 次（R4 全文去重，同一金句只保留一处）")
+        seen[nq] = 1
+    # 重复数据点：同一阿拉伯数字串在 summary/hero_facts/takeaways 中重复出现
+    def num_tokens(s):
+        return set(re.findall(r'\d+(?:\.\d+)?', str(s)))
+    from collections import Counter
+    counter = Counter()
+    holder = {}
+    src_blobs = {}
+    for name, blob in [
+        ("summary", _norm_text(data.get("summary",""))),
+        ("hero_facts", _norm_text(" ".join(f.get("value","") for f in (data.get("hero_facts") or []) if isinstance(f,dict)))),
+        ("key_takeaways", _norm_text(" ".join(str(x) for x in (data.get("key_takeaways") or [])))),
+    ]:
+        for t in num_tokens(blob):
+            if t in ("0","1","2","3","4","5"):  # 低信息量数字跳过
+                continue
+            counter[t] += 1
+            holder.setdefault(t, name)
+            if counter[t] == 2:
+                r.warn(f"重复数据点 `{t}` 在 summary/hero_facts/key_takeaways 中重复出现（R4，建议只保留一处）")
+    # sections ↔ takeaways 逐字复述：takeaway 文本与某 section blob 高相似
+    tak_blobs = [_norm_text(str(x)) for x in (data.get("key_takeaways") or [])]
+    if tak_blobs:
+        sec_blobs = _collect_section_blobs(data)
+        for i, tb in enumerate(tak_blobs):
+            if len(tb) < 8:
+                continue
+            for si, sb in enumerate(sec_blobs):
+                if not sb or len(sb) < 12:
+                    continue
+                # 相似度：takeaway 里有多少占比的字符序列出现在 section blob 里
+                if tb in sb:
+                    r.warn(f"key_takeaways[{i}] 与 sections[{si}] 逐字复述（R4，takeaways 只留结论条目、不复述机制细节）")
+                    break
 
 def validate(data, transcript_text=None):
     r = R()
@@ -381,6 +532,9 @@ def validate(data, transcript_text=None):
                 r.warn(f"reader_highlights 中 {len(not_found)} 条在原文找不到（须逐字摘自校正稿）："
                        f"{[h[:20] + '…' if len(h) > 20 else h for h in not_found[:5]]}")
 
+    # v2 R4 全文去重（WARN）：重复金句 / 重复数据点 / sections↔takeaways 复述
+    check_dedup(r, data)
+
     return r
 
 def main():
@@ -407,11 +561,17 @@ def main():
             if os.path.isfile(p):
                 cand = p
                 break
+        if not cand:
+            import glob as _g
+            _hits = sorted(_g.glob(os.path.join(base, "*_校正稿.txt")))
+            if _hits:
+                cand = _hits[0]
     base_tag = ""
     if cand:
         with open(cand, encoding="utf-8") as f:
             tx = f.read()
-        base_tag = "校正稿" if "calibrated" in os.path.basename(cand) else "原始 ASR 稿"
+        _bn = os.path.basename(cand)
+        base_tag = "校正稿" if ("calibrated" in _bn or "校正稿" in _bn) else "原始 ASR 稿"
     else:
         tx = ""
 
