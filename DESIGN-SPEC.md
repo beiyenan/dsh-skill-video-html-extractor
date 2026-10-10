@@ -372,7 +372,7 @@ function toggleTheme(){
 3. 流程图改为纵向排列，箭头旋转 90 度
 4. 引用区内边距缩小
 5. 确保触摸目标足够大（按钮 padding ≥ 44px）
-6. **条形图（`.bar-chart`）**：`.bar-row` 改 `1fr 48px` 两列，`.bar-label` 跨整行顶部（`grid-column:1/-1; text-align:left`），避免 120px 定宽标签列溢出
+6. **条形图（`.bar-chart`）**：`.bar-row` 改单列 `minmax(0,1fr)`，`.bar-label` 与 `.bar-val` 各占整行（`grid-column:1/-1; text-align:left; white-space:normal`），桌面端数值列用 `max-content` 自适应，避免任何定宽列溢出
 
 ---
 
@@ -555,7 +555,7 @@ p  { font-size: clamp(1rem, 2vw, 1.25rem); }
 .bar-chart{display:flex;flex-direction:column;gap:13px;margin-top:16px;padding:22px 24px;
   background:var(--card);border:1px solid var(--card-border);border-radius:var(--radius);
   box-shadow:var(--shadow);backdrop-filter:blur(10px)}
-.bar-row{display:grid;grid-template-columns:120px 1fr 48px;align-items:center;gap:12px}
+.bar-row{display:grid;grid-template-columns:minmax(0,120px) minmax(0,1fr) max-content;align-items:center;gap:12px}
 .bar-row .bar-label{font-size:13px;font-weight:700;color:var(--muted);text-align:right;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bar-track{height:20px;border-radius:8px;background:var(--card2);overflow:hidden}
@@ -568,9 +568,10 @@ p  { font-size: clamp(1rem, 2vw, 1.25rem); }
 @keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(calc(var(--w)/100))}}
 .bar-note{margin-top:12px;font-size:12.5px;color:var(--dim);
   border-top:1px dashed var(--card-border);padding-top:10px}
-/* 移动端：标签转上方 */
-@media(max-width:768px){.bar-row{grid-template-columns:1fr 48px}
-  .bar-row .bar-label{grid-column:1/-1;text-align:left}}
+/* 移动端：标签与数值各占整行，避免定宽列溢出 */
+@media(max-width:768px){.bar-row{grid-template-columns:minmax(0,1fr)}
+  .bar-row .bar-label{grid-column:1/-1;text-align:left;white-space:normal}
+  .bar-row .bar-val{grid-column:1/-1;text-align:left;white-space:normal}}
 ```
 
 ### 7.8 页脚折叠（v2 §3.1-6）

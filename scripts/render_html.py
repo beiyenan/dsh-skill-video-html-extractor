@@ -175,7 +175,7 @@ body[data-theme="light"] .std-card:hover{box-shadow:0 16px 40px rgba(22,32,58,.1
 .card p{color:var(--muted);font-size:14px;margin-bottom:8px}
 .card .quote{border-left:3px solid var(--accent);padding:6px 0 6px 14px;margin-top:14px;color:var(--muted);font-style:italic;font-size:14px}
 /* 架构图 */
-.diagram{background:var(--card);border:1px solid var(--card-border);border-radius:22px;padding:34px 24px;box-shadow:var(--shadow);backdrop-filter:blur(10px)}
+.diagram{padding:6px 0}
 .diagram .you{text-align:center}
 .diagram .you .pill{display:inline-block;padding:10px 26px;border-radius:100px;font-weight:800;background:linear-gradient(135deg,rgba(233,69,96,.15),rgba(245,197,24,.1));border:1px solid rgba(233,69,96,.4);color:var(--grad-b);font-size:15px}
 .diagram .you small{display:block;color:var(--dim);font-size:12px;margin-top:4px}
@@ -228,7 +228,7 @@ body[data-theme="light"] .std-card:hover{box-shadow:0 16px 40px rgba(22,32,58,.1
 .takeaway p{color:var(--muted);font-size:14px}
 /* v2 R3 量化机制条形对比（纯 CSS 色块条形；仅 transform/opacity 动效，遵守 DESIGN-SPEC 4.2） */
 .bar-chart{display:flex;flex-direction:column;gap:13px;margin-top:16px;padding:22px 24px;background:var(--card);border:1px solid var(--card-border);border-radius:var(--radius);box-shadow:var(--shadow);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
-.bar-row{display:grid;grid-template-columns:120px 1fr 48px;align-items:center;gap:12px}
+.bar-row{display:grid;grid-template-columns:minmax(0,120px) minmax(0,1fr) max-content;align-items:center;gap:12px}
 .bar-row .bar-label{font-size:13px;font-weight:700;color:var(--muted);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bar-track{height:20px;border-radius:8px;background:var(--card2);overflow:hidden}
 .bar-fill{display:block;height:100%;border-radius:8px;background:linear-gradient(90deg,var(--grad-a),var(--grad-b));transform:scaleX(0);transform-origin:left center;animation:barGrow .9s cubic-bezier(.2,.7,.3,1) forwards}
@@ -258,15 +258,16 @@ footer details .details-body{margin-top:8px;color:var(--dim);font-size:12.5px;li
   .hero{padding:90px 16px 40px}
   .hero h1{font-size:clamp(24px,7vw,36px)}
   .hero .sub{font-size:15px}
-  .diagram{padding:24px 16px}
+  .diagram{padding:0}
   section{padding:48px 16px}
   .sec-desc{margin-left:0}
   .flow{flex-direction:column;align-items:stretch}
   .flow .arr{transform:rotate(90deg);margin:2px auto}
   .flow .node{max-width:none}
-  /* v2 R3 条形图移动端：标签转上方，避免定宽溢出（保持可读） */
-  .bar-row{grid-template-columns:1fr 48px}
-  .bar-row .bar-label{grid-column:1/-1;text-align:left}
+  /* v2 R3 条形图移动端：标签与数值各占整行，避免定宽列溢出（保持可读） */
+  .bar-row{grid-template-columns:minmax(0,1fr)}
+  .bar-row .bar-label{grid-column:1/-1;text-align:left;white-space:normal}
+  .bar-row .bar-val{grid-column:1/-1;text-align:left;white-space:normal}
   /* 导航栏移动端（v2）：保留主要锚点可横向滚动，主题按钮保留贴右 */
   nav.site-nav{padding:10px 16px;gap:10px}
   nav.site-nav .nav-links{display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;flex:1}

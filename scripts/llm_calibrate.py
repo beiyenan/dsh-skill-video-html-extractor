@@ -17,7 +17,9 @@
     不改观点、不改数字量级、不添加原文没有的事实；不确定就不改（confidence=low 仅供终审参考）
 - 术语表跨块滚动累积（glossary_add），保证同一专名前后块写法一致
 - 每块响应缓存到 <out>.calib_cache/，支持断点重跑（输入 hash 变了自动重算）
-- 并发 --workers（默认 3）；单块失败重试 3 次，仍失败则该块保留原文
+- 并发 --workers（默认 3，作为上限）；单块失败重试 3 次，仍失败则该块保留原文
+- 并发自动收窄：校正稿总字数 >12000 降为 1 路、>6000 降为 2 路，
+  避免长视频高并发撞 LLM 速率限制（HTTP 429）触发退避反拖慢整体；块数少时也不超过块数
 - 退出码: 0 全部成功 | 2 部分块失败(保留原文) | 3 无余额/无资源包(1113) | 4 鉴权失败
 - 校正稿保留原 [mm:ss] 行结构；跨块碎句的最终缝合交给主模型终审
 
@@ -161,6 +163,18 @@ def repair_lines(key, base_url, model, bad_lines, glossary, idx, total):
             log(f"[{idx+1}/{total}] 行修复 {ts} OK")
     return fixed
 
+def cap_workers(requested, total_chars, total_chunks):
+    """长文本高并发易撞 LLM 速率限制（HTTP 429）触发数十秒退避，反而拖慢整体。
+    按总字符数收窄并发；短/中视频保持原值，--workers 始终作为上限（可手动 --workers 1 强制单线程）。"""
+    if total_chars > 12000:
+        cap = 1
+    elif total_chars > 6000:
+        cap = 2
+    else:
+        cap = 4
+    workers = max(1, min(requested, cap))
+    return max(1, min(workers, total_chunks))
+
 def call_chunk(key, base_url, model, chunk_text, glossary, prev_tail, idx, total):
     user = USER_TMPL.format(glossary=glossary or '（暂无）',
                             prev_tail=(prev_tail or '')[-120:], chunk=chunk_text)
@@ -257,7 +271,12 @@ def main():
     if cur:
         chunks.append(cur)
     total = len(chunks)
-    log(f"INFO: {len(entries)} 段 -> {total} 块, model={args.model}, workers={args.workers}")
+    total_chars = sum(len('\n'.join(c)) for c in chunks)
+    # 长文本高并发容易撞 LLM 速率限制（HTTP 429）触发数十秒退避，反而拖慢整体；
+    # 按总字符数自动收窄并发，短/中视频保持原值不变。--workers 仍为上限（可手动 --workers 1 强制单线程）。
+    workers = cap_workers(args.workers, total_chars, total)
+    log(f"INFO: {len(entries)} 段 -> {total} 块, model={args.model}, workers={workers}"
+        + (f"（自动收窄：原文 {total_chars} 字）" if workers < args.workers else ""))
 
     cache_dir = args.cache_dir or args.out_txt + '.calib_cache'
     os.makedirs(cache_dir, exist_ok=True)
@@ -316,8 +335,8 @@ def main():
                 out[i] = ('fail', e)
         return out
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.workers)) as ex:
-        runners = {ex.submit(run_lane, l, max(1, args.workers)): l for l in range(max(1, args.workers))}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        runners = {ex.submit(run_lane, l, workers): l for l in range(workers)}
         for f in concurrent.futures.as_completed(runners):
             lane = runners[f]
             for i, (status, payload) in f.result().items():
