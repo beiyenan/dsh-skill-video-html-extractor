@@ -101,14 +101,18 @@ Hero 区域特殊处理：`min-height: 100vh` + `padding: 120px 20px 80px`（顶
 - Logo 使用渐变文字效果
 - 链接 hover 时变强调色
 
+**导航完整性（v2 §3.3）**：导航为**每个主要 section 提供锚点**（hero + 各章节 + 要点 + 金句），锚点文字用章节 heading（无 heading 时回退为「章节 N」）。**禁止出现指向不存在 id 的死链接**（渲染器在产出 HTML 后自检所有 `href="#..."` 是否都有对应 `id`，缺失即 ERROR 拒渲染）。章节多时移动端允许锚点条横向滚动（§5.3）。**导航链接 anchor 里的文字若含 `#` 或非法字符需转义**，链接 href 用 `sec{i}` 稳定 id 保证跳转正确。
+
 **HTML 模板**：
 
 ```
 <nav>
     <div class="nav-logo">品牌名</div>
     <div class="nav-links">
-        <a href="#section1">链接1</a>
-        <a href="#section2">链接2</a>
+        <a href="#sec0">章节1标题</a>
+        <a href="#sec1">章节2标题</a>
+        <a href="#takeaways">要点</a>
+        <a href="#quotes">金句</a>
     </div>
     <button class="theme-toggle" title="切换明/暗主题" aria-label="切换明暗主题">☀️</button>
 </nav>
@@ -363,11 +367,12 @@ function toggleTheme(){
 
 ### 5.3 移动端适配清单
 
-1. 导航栏内边距缩小
+1. 导航栏内边距缩小；**链接横向滚动（`.nav-links{overflow-x:auto}`，`white-space:nowrap`）而非隐藏**（v2 导航完整性：每个主要 section 都有锚点，移动端保留可滚动锚点条）
 2. 卡片网格变为单列
 3. 流程图改为纵向排列，箭头旋转 90 度
 4. 引用区内边距缩小
 5. 确保触摸目标足够大（按钮 padding ≥ 44px）
+6. **条形图（`.bar-chart`）**：`.bar-row` 改 `1fr 48px` 两列，`.bar-label` 跨整行顶部（`grid-column:1/-1; text-align:left`），避免 120px 定宽标签列溢出
 
 ---
 
@@ -540,6 +545,44 @@ body {
 h1 { font-size: clamp(2.5rem, 6vw, 4.5rem); }
 h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); }
 p  { font-size: clamp(1rem, 2vw, 1.25rem); }
+```
+
+### 7.7 量化机制条形图（v2 §3.3 / R3）
+
+用于把原文里"可计算"的机制可视化——倍数、参照点、增减对比（如长期支持 61% vs 一次性 19%）。**纯 CSS 色块条形，无 JS**；数值用 `--w` 自定义属性驱动 `transform:scaleX()` 生长动画（只用 transform/opacity，遵守 §4.2/§9.2）。挂在任意 section 的 `bars` 字段上：`bars=[{label,value,text?,tone?}]`、`bar_note?`。`value` 为数值（相对最大项归一化到宽度），`text` 为展示文案（缺省显示 value）。
+
+```
+.bar-chart{display:flex;flex-direction:column;gap:13px;margin-top:16px;padding:22px 24px;
+  background:var(--card);border:1px solid var(--card-border);border-radius:var(--radius);
+  box-shadow:var(--shadow);backdrop-filter:blur(10px)}
+.bar-row{display:grid;grid-template-columns:120px 1fr 48px;align-items:center;gap:12px}
+.bar-row .bar-label{font-size:13px;font-weight:700;color:var(--muted);text-align:right;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar-track{height:20px;border-radius:8px;background:var(--card2);overflow:hidden}
+.bar-fill{display:block;height:100%;border-radius:8px;
+  background:linear-gradient(90deg,var(--grad-a),var(--grad-b));
+  transform:scaleX(0);transform-origin:left center;
+  animation:barGrow .9s cubic-bezier(.2,.7,.3,1) forwards}
+.bar-row.green .bar-fill{background:linear-gradient(90deg,var(--accent2),var(--grad-b))}
+.bar-row.red .bar-fill{background:linear-gradient(90deg,var(--danger),var(--grad-c))}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(calc(var(--w)/100))}}
+.bar-note{margin-top:12px;font-size:12.5px;color:var(--dim);
+  border-top:1px dashed var(--card-border);padding-top:10px}
+/* 移动端：标签转上方 */
+@media(max-width:768px){.bar-row{grid-template-columns:1fr 48px}
+  .bar-row .bar-label{grid-column:1/-1;text-align:left}}
+```
+
+### 7.8 页脚折叠（v2 §3.1-6）
+
+校正说明与实体列表默认折叠，普通读者不被生产过程信息干扰，点开可见；生成声明不折叠。
+
+```
+footer details{margin:10px auto 0;max-width:720px;text-align:left;
+  background:var(--card);border:1px solid var(--card-border);
+  border-radius:var(--radius);padding:10px 14px}
+footer summary{cursor:pointer;font-weight:700;color:var(--muted);font-size:13px;user-select:none}
+footer details .details-body{margin-top:8px;color:var(--dim);font-size:12.5px;line-height:1.7}
 ```
 
 ---

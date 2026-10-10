@@ -32,16 +32,20 @@ SYS_PROMPT = """你是视频内容结构化编辑。给你一份视频转写校�
 - 只使用校正稿里的事实/数字/人名，禁止编造；数字必须能在校正稿里找到出处。
 - 金句引用保持原样（原话），不篡改。
 - title：具体、可检索、≤30 字；禁用泛词（转写/视频文案/内容整理/transcript/未命名/视频转写/文本整理）。
-- reader_highlights：8–15 条，每条 4–30 字，必须【逐字摘自校正稿】（一个字都不能改，含标点）；挑含金量最高的核心概念定义、关键结论、金句、重要数字表述；禁止挑「首先/所以/但是」这类过渡词。
+- reader_highlights：8–15 条，每条 4–30 字，必须【逐字摘自校正稿】（一个字都不能改，含标点，连补主语/换同义词都不行）；挑含金量最高的核心概念定义、关键结论、金句、重要数字表述；禁止挑「首先/所以/但是」这类过渡词。校验器会逐条回原文比对，找不到的会被打回。
 - key_takeaways：5–10 条，desc 末尾带 [mm:ss] 时间戳，时间戳必须来自校正稿里出现过的行首时间戳。
 - 只输出一个合法 JSON 对象：不要代码块围栏、不要任何解释文字、不要省略号。
+
+【summary 写法（重要，最常写错）】
+- 写「核心观点」，不是「内容摘要」。3–5 句话只保留：① 文案的中心论点（1 句，可加引号原文）；② 支撑论点的 2–3 个关键数字；③ 一句行动指令或结论。
+- 禁止叙事流水账：不写「博主用 X 经历切入」「后来他读到 Y」「由此他给出 Z」「结尾邀请观众 W」。视频怎么讲的、谁说的、怎么转折的，留给 sections 和 key_takeaways 去讲。
 
 【字段结构（照此输出，键名一字不差）】
 {
   "title": "字符串",
   "tone": "语气（教程/访谈/演讲/新闻/…）",
-  "summary": "3–5 句话概括全文",
-  "hero_facts": [{"value": "冲击性数字", "label": "一句话说明", "tone": "acc|green|red|warn|purple"}],
+  "summary": "核心观点（见上方写法要求）",
+  "hero_facts": [{"value": "冲击性数字", "label": "一句话说明（label 里不要重复 value 的数字）", "tone": "acc|green|red|warn|purple"}],
   "sections": [ {"type": "…", "heading": "≤40字", "desc": "可选", …按类型配字段…} ],
   "key_takeaways": [{"title": "…", "desc": "…… [mm:ss]"}],
   "reader_highlights": ["逐字短语", "…"],
@@ -61,16 +65,25 @@ SYS_PROMPT = """你是视频内容结构化编辑。给你一份视频转写校�
 - list：清单/条目 → items:[{"title","desc"?}]
 判断口诀：时序→timeline、对比→compare、痛点解法→pair、结构→architecture、流向→flow、观点句→quote、清单→list、其余→default。
 
+【结构规则（v2，务必遵守，可显著减少返工）】
+- R1 叙事钩子前置：原稿若含真实人物事件/案例故事，必须用 timeline 呈现该故事，并放在 Hero 之后、理论性章节之前（让读者先产生疑问再进入机制解释）。纯场景描写不算故事，无需 timeline。
+- pair 收紧：仅当「痛点」与「解法」真实一一对应时才用 pair；纯解释性内容不得伪装成解法。拿不准就用 default。
+- R2 数据对比成节：强对比数据（如 A 61% vs B 19%）优先用 compare 或 bars 集中呈现，不要拆散到多处。
+- R3 量化机制可视化：章节里出现倍数、参照点、增减对比等「可计算」数据时，给该 section 加 "bars": [{"label","value":数字,"text"?:显示文案,"tone"?:acc|green|red|warn|purple}]，可再加 "bar_note"。bars 可挂在任意 type 的 section 上。bars 里的数字同样必须出自校正稿。
+- R4 全文去重：同一金句、同一数字、同一结论在全页只出现一次。分工：hero_facts 承载记忆点数字，summary/key_takeaways 不再重复这些数字（改用「七成」「五大」等中文表述或不提数字）；金句只放 conclusion.cards，sections 里不要再设 quote 型章节复述同样的句子。
+- R5 解法挂钩机制：若解法是从机制推导的，解法里显式标注对应机制（如「帮急不帮穷 ← 享乐适应」）。
+
 【质量要求】
 - hero_facts 3–6 个，挑全文最冲击的数字做读者记忆锚点。
 - sections 的 desc/content 要具体（带数字、人名、细节），不要空泛概括。
 - conclusion.cards 1–3 条最提神的金句。"""
 
-REPAIR_TMPL = """你上次输出的 analysis.json 未通过结构校验。错误清单：
+REPAIR_TMPL = """你上次输出的 analysis.json 未通过自检。问题清单（[ERROR] 必须修复，[WARN] 逐条消除）：
 {errors}
 
 请修正后重新输出【完整】 JSON 对象（不要围栏、不要解释、不要省略）。
-校正稿原文不变，仍是上一份输入里的那份；所有 reader_highlights 必须逐字摘自校正稿。"""
+校正稿原文不变，仍是上一份输入里的那份；所有 reader_highlights 必须逐字摘自校正稿；
+同一金句/数字在全 JSON 中只出现一次（去重类问题直接删掉重复处，不要改写措辞）。"""
 
 MAX_TRANSCRIPT_CHARS = 60000   # 超出截断（glm-4.7 上下文足够，这里只防极端长视频把输出预算挤没）
 GEN_MAX_TOKENS = 16000
@@ -175,19 +188,27 @@ def main():
     if draft is None:
         log("WARN: 3 次生成均失败，保留骨架，回退主模型手填"); sys.exit(5)
 
-    # 自检 + 最多 2 轮修复回喂
+    # 自检 + 最多 2 轮修复回喂（ERROR 优先；无 ERROR 时 WARN 也回喂一次，在起草阶段消掉）
     from validate_analysis import validate
+    warn_round_used = False
     for rd in (1, 2):
         r = validate(draft, transcript)
-        if not r.errors:
-            if r.warns:
-                log(f"INFO: 自检 {len(r.warns)} 条 WARN（终审时再处理）")
+        if not r.errors and not r.warns:
             break
-        log(f"INFO: 自检 {len(r.errors)} 个 ERROR，回喂修复（第 {rd} 轮）: {'；'.join(r.errors[:3])}")
+        if not r.errors and warn_round_used:
+            log(f"INFO: WARN 修复后仍余 {len(r.warns)} 条（终审时再处理）")
+            break
+        if r.errors:
+            log(f"INFO: 自检 {len(r.errors)} 个 ERROR，回喂修复（第 {rd} 轮）: {'；'.join(r.errors[:3])}")
+            issues = ["[ERROR] " + e for e in r.errors] + ["[WARN] " + w for w in r.warns]
+        else:
+            warn_round_used = True
+            log(f"INFO: 无 ERROR，回喂修复 {len(r.warns)} 条 WARN（第 {rd} 轮）: {'；'.join(r.warns[:2])}")
+            issues = ["[WARN] " + w for w in r.warns]
         fix_msgs = [{"role": "system", "content": SYS_PROMPT},
                     {"role": "user", "content": build_user(transcript, glossary, low_items)},
                     {"role": "assistant", "content": json.dumps(draft, ensure_ascii=False)[:12000]},
-                    {"role": "user", "content": REPAIR_TMPL.format(errors="\n".join("- " + e for e in r.errors))}]
+                    {"role": "user", "content": REPAIR_TMPL.format(errors="\n".join("- " + e for e in issues))}]
         try:
             fixed = try_generate(key, args.base_url, args.model, fix_msgs)
         except (NoQuota, AuthError):
