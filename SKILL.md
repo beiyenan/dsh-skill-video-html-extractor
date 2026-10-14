@@ -67,7 +67,7 @@ python3 <skill>/scripts/validate_analysis.py analysis.json
 python3 <skill_dir>/scripts/run_pipeline.py prepare <输入文件> [--workers 3] [--out 输出目录]
 ```
 
-脚本依次做：提取 16k mono WAV → ASR 分块转写 → 智谱机器校正 → **交叉验证（检查 changes 清单中的修正是否真的应用到了校正稿文本，未应用的自动补全）** → 生成骨架 + 任务单 → **GLM 起草完整 analysis.json**（`llm_draft_analysis.py`，自带限流退避与 2 轮校验回喂修复；已有非空 title 的 analysis.json 不覆盖；`--no-draft` 可关闭）。**若工作区已有 `transcript.txt`/`transcript_calibrated.txt` 缓存会直接跳过对应步骤（命中缓存近零成本），且绝不覆盖已有内容的 `analysis.json`。** 退出码 `0` 成功；`1` 提取失败（看上方输出，若为解码问题走文末降级方案）；`3/4` 校正 key 不可用（跳过校正与起草，你手工完成）。
+脚本依次做：提取 16k mono WAV → ASR 分块转写 → 智谱机器校正 → **交叉验证（检查 changes 清单中的修正是否真的应用到了校正稿文本，未应用的自动补全）** → 生成骨架 + 任务单 → **GLM 起草完整 analysis.json**（`llm_draft_analysis.py`，自带限流退避与 2 轮校验回喂修复；已有非空 title 的 analysis.json 不覆盖；`--no-draft` 可关闭）。**若工作区已有 `transcript.txt`/`transcript_calibrated.txt` 缓存会直接跳过对应步骤（命中缓存近零成本），且绝不覆盖已有内容的 `analysis.json`。** 退出码 `0` 成功；`1` 提取失败（看上方输出，若为解码问题走文末降级方案）；`3/4` 校正 key 不可用（跳过校正与起草，你手工完成）；`5` **假静默拦截**（ASR 全输出「(静默)」但 WAV 峰值能量 ≥500，转写不可信——典型成因是无 ffmpeg 时走了包络近似重建，WAV 失真。按报错指引装 ffmpeg、删 wav/transcript 缓存重跑；**禁止**把「全片静默」当结论写进 analysis.json。包络近似路径会额外生成 `<输入名>.wav.envelope` 标记文件便于定位成因，finish 清理会一并删除）。**若 prepare 日志出现「包络近似」字样，先装 ffmpeg 再跑，不要继续。**
 
 完成后它会打印：草稿路径、任务单路径、以及低置信度校正项清单。
 
@@ -140,6 +140,8 @@ python3 <skill_dir>/scripts/run_pipeline.py finish <输入文件> [--theme dark|
 | 自动删除（精确路径） | 说明 |
 |---|---|
 | `<输入名>.wav` | 音频中间件 |
+| `<输入名>.wav.envelope` | 包络近似标记文件（若走过降级路径） |
+| `<输入名>.aac` | 包络近似路径分离出的 AAC 中间件 |
 | `<输入名>.wav.chunks/` | ASR 分块目录 |
 | `transcript.txt` | ASR 原始逐字稿（仅保留校正稿） |
 | `transcript_calibrated.txt.calib_cache/` | 校正缓存 |

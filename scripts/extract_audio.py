@@ -138,6 +138,13 @@ def main():
             print(f"OK: MP4→AAC→WAV（包络近似） -> {dst}")
             print("HINT: 这是包络近似重建（非精确解码），转写质量差属预期。装好工具链 ffmpeg 后重跑即可，"
                   "或改传 .wav 原音频", file=sys.stderr)
+            # 防呆标记：包络近似重建的 WAV 失真严重，下游 run_pipeline 若发现 ASR 全静默，
+            # 凭此标记可直接给出「装 ffmpeg 重跑」的精确指引，而不是采信假静默。
+            try:
+                with open(dst + ".envelope", "w", encoding="utf-8") as mf:
+                    mf.write("envelope-approximation: decoded without ffmpeg (lossy)\n")
+            except OSError:
+                pass
             return
         fail(f"AAC 解码为 WAV 失败（退出码 {r2}），已产出中间文件 {aac_out}",
              f"请手动把 {aac_out} 在别处解码为 16kHz mono .wav 再上传，或提供 .srt/.vtt 字幕")

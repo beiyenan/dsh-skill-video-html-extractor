@@ -202,6 +202,69 @@ def cmd_calibrate(args):
     print("== 下一步 ==  按 TASK.md 审读校准结果，自检到 0 error 后运行 finish")
 
 
+def wav_peak(path):
+    """读 16bit PCM WAV，返回全局峰值（0-32767）。非 WAV/读取失败返回 None。"""
+    try:
+        import wave, struct
+        with wave.open(path) as w:
+            if w.getsampwidth() != 2:
+                return None
+            peak = 0
+            while True:
+                data = w.readframes(w.getframerate())  # 按 1 秒窗读，避免整段进内存
+                if not data:
+                    break
+                for i in range(0, len(data) - 1, 2):
+                    v = struct.unpack_from('<h', data, i)[0]
+                    if v < 0:
+                        v = -v
+                    if v > peak:
+                        peak = v
+            return peak
+    except Exception:
+        return None
+
+def transcript_all_silent(tx_path):
+    """transcript 各行去掉时间戳后，正文是否全部是 (静默)。"""
+    try:
+        with open(tx_path, encoding="utf-8") as f:
+            lines = [l.strip() for l in f if l.strip() and not l.startswith("#")]
+        if not lines:
+            return True
+        bodies = [re.sub(r"^\[\d{2}:\d{2}\]\s*", "", l) for l in lines]
+        return all(b in ("(静默)", "（静默）", "") for b in bodies)
+    except OSError:
+        return False
+
+def check_silence_sanity(wav, tx):
+    """ASR 全静默但 WAV 能量明显非零 → 转写结果不可信（典型成因：包络近似失真 WAV），
+    直接报错退出，不允许把「假静默」带进校正/起草/渲染。"""
+    if not os.path.isfile(tx):
+        return
+    if not transcript_all_silent(tx):
+        return
+    peak = wav_peak(wav)
+    if peak is None or peak < 500:  # 峰值 < 500 属真实静音/近静音，放行
+        return
+    envelope = os.path.isfile(wav + ".envelope")
+    print("", file=sys.stderr)
+    print("=" * 60, file=sys.stderr)
+    print("ERROR: ASR 输出全为「(静默)」，但音频峰值能量为 %d（正常语音范围），" % peak, file=sys.stderr)
+    print("       转写结果不可信，已中止流水线。", file=sys.stderr)
+    if envelope:
+        print("成因：本 WAV 由【包络近似重建】生成（存在 %s.envelope 标记），" % os.path.basename(wav), file=sys.stderr)
+        print("      失真波形导致 ASR 误判为静默。", file=sys.stderr)
+        print("修复：安装 ffmpeg 工具链后删除缓存重跑：", file=sys.stderr)
+        print("  1) sh <dsh-backup 包内>/install-deps.sh install-ffmpeg", file=sys.stderr)
+        print("  2) rm %s %s.envelope %s" % (wav, wav, tx), file=sys.stderr)
+        print("  3) 重新运行 prepare", file=sys.stderr)
+    else:
+        print("可能成因：音频轨损坏 / ASR 服务异常 / 音频语言不被支持。", file=sys.stderr)
+        print("请人工试听确认视频确实无语音后，再删除 %s 重跑（若确认是真实静音）。" % tx, file=sys.stderr)
+    print("=" * 60, file=sys.stderr)
+    sys.exit(5)
+
+
 def cmd_prepare(args):
     inp = ensure_input(args.inp)
     od = out_dir_for(inp, args.out)
@@ -230,6 +293,8 @@ def cmd_prepare(args):
                   "--workers", str(args.workers)], env=env)
         if rc == 2:
             print("WARN: 部分 ASR 块失败，但已有部分结果写出，可继续。", file=sys.stderr)
+        # 防呆：ASR 全静默但音频能量非零 → 转写不可信（典型为包络近似失真 WAV），立即中止
+        check_silence_sanity(wav, tx)
 
     # 2) 机器校正
     if nonempty(calib):
@@ -282,6 +347,8 @@ def cleanup_intermediates(od, inp):
     wav = os.path.join(od, base + ".wav")
     candidates = [
         wav,
+        wav + ".envelope",
+        os.path.join(od, base + ".aac"),
         wav + ".chunks",
         os.path.join(od, "transcript.txt"),
         os.path.join(od, "transcript_calibrated.txt.calib_cache"),
