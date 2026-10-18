@@ -1,6 +1,6 @@
 # video-html-extractor
 
-> 从用户上传的音视频文件提取文案（语音转文字），并生成**两版单文件 HTML**：摘要版（8 种视觉组件混合排版，结构化展示章节/要点/金句）与阅读版（逐字稿分段排版、时间戳导航）。产物按文案主题自动命名。
+> 从用户上传的音视频文件提取文案（语音转文字），并生成**两版单文件 HTML**：摘要版（9 种视觉组件混合排版，结构化展示章节/要点/金句）与阅读版（逐字稿分段排版、时间戳导航）。产物按文案主题自动命名。
 
 适用于 `.mp4/.mov/.mkv/.mp3/.wav/.m4a/.flac/.ogg` 等音视频文件，要求「提取文案」「转成文字」「做成网页/HTML」「可视化」「整理内容」的场景。
 
@@ -123,7 +123,7 @@ ffmpeg -version   # 能打印版本号即通过
     ├── llm_calibrate.py      # 机器校正（调智谱，主流程）
     ├── llm_draft_analysis.py # GLM 起草 analysis.json（prepare 自动跑，带限流退避与 2 轮校验回喂修复）
     ├── validate_analysis.py  # 校验 analysis.json（--transcript 自动探测校正稿做溯源基准）
-    ├── render_html.py        # 摘要版 HTML：8 种视觉组件混合排版（主流程）
+    ├── render_html.py        # 摘要版 HTML：9 种视觉组件混合排版（主流程）
     ├── read_render.py        # 阅读版 HTML：逐字稿分段、时间戳导航；高亮暗色金黄/亮色天蓝（主流程）
     ├── decode_aac.py         # 辅助：纯 Python 解 AAC（降级用）
     └── mp4_extract_aac.py    # 辅助：mp4 抽 AAC（降级用）

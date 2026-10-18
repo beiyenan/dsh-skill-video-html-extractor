@@ -62,6 +62,12 @@ python3 scripts/run_pipeline.py --help >/dev/null && echo '② CLI OK'
 python3 scripts/validate_analysis.py examples/analysis.example.json
 #   期望：校验结果：0 错误，N 警告（WARN 不阻塞）
 
+# ③b 契约一致性 + 渲染自检（覆盖全部 9 种组件，含 bars 条形图与 table）
+python3 scripts/schema.py >/dev/null && echo '③b schema OK'
+python3 scripts/render_html.py examples/analysis.example.json --output /tmp/_smoke.html
+grep -c 'class="bar-chart"' /tmp/_smoke.html   # 期望 ≥1（范本含 bars 示例）
+grep -c '<table class="tbl">' /tmp/_smoke.html  # 期望 ≥1（范本含 table 示例）
+
 # ④ ffmpeg 探测（可缺，缺了走降级）
 command -v ffmpeg && ffmpeg -version | head -1 || echo '④ 无 ffmpeg（降级可用，建议安装）'
 ```
@@ -100,8 +106,9 @@ video-html-extractor/
     ├── decode_aac.py         ← 降级用：纯 Python ADTS/AAC 包络近似解码（精度有限，会打 HINT）
     ├── asr_transcribe.py     ← 分块并行 ASR（SiliconFlow），输出带 [mm:ss] 时间戳
     ├── llm_calibrate.py      ← 机器校正预筛（Zhipu）：校正稿 + report.json（改动清单可审计）
+    ├── schema.py             ← analysis.json 契约的唯一定义处（类型枚举/字段配对/图标/泛词）；校验器与起草提示词都从它取，`python3 scripts/schema.py` 跑一致性断言
     ├── validate_analysis.py  ← 严格 schema 校验器：exit 0 通过 / 1 ERROR 拦截 / 2 WARN 放行；数字出处校验兼容中文数字写法
-    ├── render_html.py        ← 摘要版渲染器（8 种视觉组件，单文件零外部依赖）
+    ├── render_html.py        ← 摘要版渲染器（9 种视觉组件，单文件零外部依赖；输出后做渲染后自检）
     └── read_render.py        ← 阅读版渲染器（分段排版，字号/字体/主题可调，支持 --theme dark|light）
 ```
 
