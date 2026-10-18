@@ -40,7 +40,9 @@ if [[ "$CLEAN_URL" == *'@github.com/'* ]]; then
 fi
 
 # 3) 用带 token 的 URL 推送（一次性，不改 config）
-AUTH_URL="${CLEAN_URL/#https:\/\//https:\/\/${TOKEN}@}"
+#    fine-grained PAT（github_pat_ 开头）作为 HTTPS 用户名时用 x-access-token，
+#    否则 GitHub 会拒绝认证并要求交互式 Username（无 TTY 时报 fatal: could not read Username）。
+AUTH_URL="${CLEAN_URL/#https:\/\//https:\/\/x-access-token:${TOKEN}@}"
 
 BRANCH_ARG="${1:-}"
 if [[ "$BRANCH_ARG" == "all" ]]; then
