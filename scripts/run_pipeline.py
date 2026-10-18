@@ -24,6 +24,8 @@ import argparse, json, os, re, shutil, subprocess, sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SECRETS = os.path.expanduser("~/.dsh/secrets")
+sys.path.insert(0, SCRIPT_DIR)
+import schema as SC  # noqa: E402  —— TASK.md 里的类型/tone 清单由契约生成，不再手抄
 
 def run(cmd, **kw):
     r = subprocess.run(cmd, capture_output=True, text=True, **kw)
@@ -164,8 +166,8 @@ python3 {os.path.join(SCRIPT_DIR, 'validate_analysis.py')} {os.path.join(od, 'an
 
 ## 若草稿是空骨架（GLM 起草失败时）
 按范本 `{os.path.basename(example_path)}` 的字段结构手填。字段规范：
-title(≤30字,禁泛词) / tone / summary(3–5句) / hero_facts(3–6个,{{value,label,tone:acc|green|red|warn|purple}}) /
-sections(6–10个,type∈default|timeline|compare|pair|architecture|flow|quote|list,字段照范本) /
+title(≤30字,禁泛词) / tone / summary(3–5句) / hero_facts(3–6个,{{value,label,tone:{SC.tone_list()}}}) /
+sections(6–10个,type∈{'|'.join(sorted(SC.SECTION_TYPES))},字段照范本) /
 key_takeaways(5–10条,desc 带 [mm:ss]) / reader_highlights(8–15条,4–30字,逐字摘自校正稿,禁过渡词) /
 conclusion.cards(1–3条金句) / entities / footer.calibration。
 """

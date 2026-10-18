@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """render_html.py — analysis.json → 单文件可视化 HTML（摘要版）
 
-8 种视觉组件混合排版：
-  数据卡组 / 时间线 / 对比卡 / 配对卡 / 架构图 / 流程图 / 金句卡 / 清单行
+9 种视觉组件混合排版：
+  数据卡组 / 时间线 / 对比卡 / 配对卡 / 架构图 / 流程图 / 金句卡 / 清单行 / 对照表
+外加挂在任意 section 上的量化条形图（bars，v2 R3）。
 设计令牌系统：深色默认（DESIGN-SPEC），--theme=light 回落亮色，全部走 CSS 变量。
-零 JS、零外部资源、单文件可直接双击打开。摘要版不含逐字稿（校正稿以独立 txt 文件交付）。
+零外部资源、单文件可直接双击打开；自包含内联 JS 仅用于主题偏好与条形图滚动进场，
+两者的默认态（无 JS）都是「完整可读」——JS 是增强，不是渲染前提。摘要版不含逐字稿。
+
+契约（类型枚举 / 泛词 / 图标）来自 schema.py，import 时断言渲染分支齐备。
 
 用法:
   python3 render_html.py analysis.json [transcript.txt] [--clean] [--theme=dark|light]
@@ -15,12 +19,13 @@
 
 import argparse, json, sys, html, os, re
 
-# ── 泛词校验 ──
-BAN_WORDS = ["转写", "视频文案", "内容整理", "transcript", "未命名", "视频转写", "文本整理"]
+# ── 契约（泛词、类型枚举、图标映射）唯一来源：schema.py ──
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import schema as SC  # noqa: E402
 
 def validate_title(title):
     t = title.strip().lower()
-    for w in BAN_WORDS:
+    for w in SC.BAN_WORDS:
         if w.lower() in t:
             print(f"ERROR: 标题含泛词「{w}」，必须用具体主题。修改 analysis.json 的 title 字段。", file=sys.stderr)
             sys.exit(1)
@@ -36,10 +41,13 @@ ALL_CSS = """
   --primary:#1a1a2e;--secondary:#16213e;--accent-deep:#0f3460;
   --highlight:#e94560;--gold:#f5c518;
   --text-light:#f0f0f0;--text-muted:#b0b0b0;
-  --card-bg:rgba(255,255,255,0.06);--card-border:rgba(255,255,255,0.1);
+  --card-bg:rgba(38,41,66,0.88);--card-border:rgba(255,255,255,0.1);
   --radius:16px;--shadow:0 8px 32px rgba(0,0,0,0.3);
   /* 组件级语义变量（深色默认，亮色 override 见下） */
-  --bg:#1a1a2e;--bg2:#16213e;--card:rgba(255,255,255,0.06);--card2:rgba(255,255,255,0.03);
+  /* v3 §4.9：卡片必须"遮住"背景粒子——0.06 的白透明度等于没有遮罩，
+     300px 级的粒子色块会直接糊在正文上（实测截图可见紫红色脏斑）。
+     毛玻璃感靠 backdrop-filter 的模糊 + 轻微透明保留，不靠"几乎全透"。 */
+  --bg:#1a1a2e;--bg2:#16213e;--card:rgba(38,41,66,0.88);--card2:rgba(255,255,255,0.07);
   --line:rgba(255,255,255,0.1);--txt:#f0f0f0;--muted:#b0b0b0;--dim:#888;
   --accent:#e94560;--accent2:#00d9ff;--warn:#f5c518;--danger:#ff5c7a;--purple:#a78bfa;
   --grad-a:#e94560;--grad-b:#f5c518;--grad-c:#ff6b6b;
@@ -231,14 +239,36 @@ body[data-theme="light"] .std-card:hover{box-shadow:0 16px 40px rgba(22,32,58,.1
 .bar-row{display:grid;grid-template-columns:minmax(0,120px) minmax(0,1fr) max-content;align-items:center;gap:12px}
 .bar-row .bar-label{font-size:13px;font-weight:700;color:var(--muted);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bar-track{height:20px;border-radius:8px;background:var(--card2);overflow:hidden}
-.bar-fill{display:block;height:100%;border-radius:8px;background:linear-gradient(90deg,var(--grad-a),var(--grad-b));transform:scaleX(0);transform-origin:left center;animation:barGrow .9s cubic-bezier(.2,.7,.3,1) forwards}
+.bar-fill{display:block;height:100%;border-radius:8px;background:linear-gradient(90deg,var(--grad-a),var(--grad-b));transform:scaleX(calc(var(--w,100)/100));transform-origin:left center}
+/* v3 §4.2/§4.6：生长动画由 JS 打 `.js` 门控 + 滚动进场时激活，不在页面加载时就跑完。
+   默认态（无 JS / IO 不可用）条就是终态宽度，保证"看得见"优先于"会动"。 */
+.js .bar-fill{transform:scaleX(0)}
+.js .bar-chart.in .bar-fill{animation:barGrow .9s cubic-bezier(.2,.7,.3,1) forwards}
+/* 逐条 stagger：纯 CSS nth-child，不往 style 里塞 var()（shorthand + var 出错时整条声明失效） */
+.js .bar-chart.in .bar-row:nth-child(2) .bar-fill{animation-delay:80ms}
+.js .bar-chart.in .bar-row:nth-child(3) .bar-fill{animation-delay:160ms}
+.js .bar-chart.in .bar-row:nth-child(4) .bar-fill{animation-delay:240ms}
+.js .bar-chart.in .bar-row:nth-child(5) .bar-fill{animation-delay:320ms}
+.js .bar-chart.in .bar-row:nth-child(6) .bar-fill{animation-delay:400ms}
+.js .bar-chart.in .bar-row:nth-child(7) .bar-fill{animation-delay:480ms}
+.js .bar-chart.in .bar-row:nth-child(n+8) .bar-fill{animation-delay:560ms}
 .bar-row.green .bar-fill{background:linear-gradient(90deg,var(--accent2),var(--grad-b))}
 .bar-row.red .bar-fill{background:linear-gradient(90deg,var(--danger),var(--grad-c))}
 .bar-row.warn .bar-fill{background:linear-gradient(90deg,var(--grad-b),#ff8c00)}
 .bar-row.purple .bar-fill{background:linear-gradient(90deg,var(--purple),var(--accent2))}
 .bar-val{font-size:14px;font-weight:800;color:var(--grad-b);text-align:left;white-space:nowrap}
-@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(calc(var(--w)/100))}}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(calc(var(--w,100)/100))}}
 .bar-note{margin-top:12px;font-size:12.5px;color:var(--dim);border-top:1px dashed var(--card-border);padding-top:10px}
+/* 表格（v3：二维对照——档位/价格/排期/参数） */
+.tbl-wrap{overflow-x:auto;border:1px solid var(--card-border);border-radius:var(--radius);box-shadow:var(--shadow);background:var(--card);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+table.tbl{width:100%;border-collapse:collapse;font-size:14.5px;min-width:520px}
+table.tbl th{position:sticky;top:0;background:var(--card2);color:var(--txt);font-weight:800;text-align:left;padding:12px 14px;border-bottom:1px solid var(--card-border);white-space:nowrap}
+table.tbl td{padding:11px 14px;border-bottom:1px solid var(--line);color:var(--muted);vertical-align:top}
+table.tbl tbody tr:last-child td{border-bottom:none}
+table.tbl td.num{font-variant-numeric:tabular-nums;color:var(--txt);font-weight:700;white-space:nowrap}
+/* 首列通常是"行名"（消解它 / 直面它 这种短标签），auto 布局会把它挤到换行；给它 nowrap + 最小宽度 */
+table.tbl th:first-child,table.tbl td:first-child{white-space:nowrap;padding-right:18px}
+.tbl-caption{margin-top:10px;font-size:12.5px;color:var(--dim);text-align:center}
 /* 页脚（v2：校正说明与实体列表默认折叠进 <details><summary>，生成声明不折叠） */
 footer{padding:32px 0 48px;border-top:1px solid var(--card-border);color:var(--dim);font-size:13px;text-align:center}
 footer p{margin:4px 0}
@@ -272,6 +302,22 @@ footer details .details-body{margin-top:8px;color:var(--dim);font-size:12.5px;li
   nav.site-nav{padding:10px 16px;gap:10px}
   nav.site-nav .nav-links{display:flex;overflow-x:auto;-webkit-overflow-scrolling:touch;flex:1}
   nav.site-nav .nav-links a{white-space:nowrap;flex-shrink:0}
+  /* 表格移动端：字号不缩（靠 .tbl-wrap 横滑），触控命中区加大 */
+  table.tbl{font-size:14px}
+  table.tbl th,table.tbl td{padding:10px 12px}
+}
+/* v3 §4.6：减弱动效必须还原"终态"，只写 animation:none 会让元素退回隐藏态（比动画更糟）。
+   这里逐个把 animation-fill-mode 的目标值显式写回，保证内容始终可读、布局不变。 */
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+  html{scroll-behavior:auto}
+  .hero .tagline,.hero h1,.hero .sub,.hero .scroll-hint,.facts{animation:none;opacity:1;transform:none}
+  .hero .scroll-hint .arrow{animation:none;transform:none}
+  .flow .arr{animation:none;opacity:1}
+  .bg-particles{display:none}
+  /* 条形：直接终态宽度（--w 即百分比），不依赖 JS 加 .in */
+  .js .bar-fill{transform:scaleX(calc(var(--w,100)/100))}
+  .js .bar-chart.in .bar-fill{animation:none}
 }
 """
 
@@ -308,14 +354,15 @@ ICONS = {
     "footprint":'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16v-2.38C4 11.5 2.97 10.5 3 8c.03-2.72 1.49-6 4.5-6C9.37 2 10 3.8 10 5.5c0 2.12-.5 4-3 4"/><path d="M20 20v-2.38c0-2.12 1.03-3.12 1-5.62-.03-2.72-1.49-6-4.5-6C14.63 6 14 7.8 14 9.5c0 2.12.5 4 3 4"/><path d="M16 17h4"/><path d="M10 17H4"/><path d="M18 17v1a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-1"/><path d="M6 17v1a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-1"/></svg>',
     "flag":     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" x2="4" y1="22" y2="15"/></svg>',
     "heart":    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>',
+    "table":    '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M12 3v18"/></svg>',
 }
 
-# 章节类型→图标映射
-SEC_ICON = {
-    "timeline": "timeline", "compare": "scale", "pair": "grid2",
-    "architecture": "building", "flow": "flow", "quote": "quote",
-    "list": "list", "default": "compass",
-}
+# 章节类型→图标映射（唯一来源：schema.SECTION_SPECS[t].icon，避免与类型清单脱节）
+SEC_ICON = {t: spec["icon"] for t, spec in SC.SECTION_SPECS.items()}
+# 契约里登记的图标必须真实存在，否则章节头会渲染成空图标（静默降级）
+_missing_ico = sorted({spec["icon"] for spec in SC.SECTION_SPECS.values()} - set(ICONS))
+if _missing_ico:
+    raise SystemExit(f"ERROR: render_html 缺少章节图标 {_missing_ico}（schema 已登记，必须在 ICONS 里补齐）")
 
 # 状态→图标映射
 STATUS_ICON = {
@@ -359,23 +406,14 @@ def render_section(sec, idx):
     desc = sec.get("desc", "")
     if desc:
         parts.append(f'<p class="sec-desc">{esc(desc)}</p>')
-    stype = sec.get("type", "default")
-    if stype == "timeline":
-        parts.append(render_timeline(sec))
-    elif stype == "compare":
-        parts.append(render_compare(sec))
-    elif stype == "pair":
-        parts.append(render_pair(sec))
-    elif stype == "architecture":
-        parts.append(render_architecture(sec))
-    elif stype == "flow":
-        parts.append(render_flow(sec))
-    elif stype == "quote":
-        parts.append(render_quote_section(sec))
-    elif stype == "list":
-        parts.append(render_list_section(sec))
-    else:
-        parts.append(render_default_section(sec))
+    fn = RENDERERS.get(stype)
+    if fn is None:
+        # 校验器已把未知类型判为 ERROR，走到这里说明有人绕过校验直接调渲染器。
+        # 静默降级成 default 是最坏结果（读者看到一段散文，却以为作者画了表），
+        # 所以照样渲染兜底，但在 stderr 留痕。
+        print(f"WARN : sections[{idx}].type=`{stype}` 无对应渲染分支，降级为 default 呈现。", file=sys.stderr)
+        fn = render_default_section
+    parts.append(fn(sec))
     # v2 R3：section 若带 bars 字段，额外追加量化机制条形图（可挂在任意 type 上）
     if sec.get("bars") or sec.get("bar_chart"):
         parts.append(render_barchart(sec))
@@ -503,6 +541,38 @@ def render_list_section(sec):
     p.append('</div>')
     return "\n".join(p)
 
+def render_table_section(sec):
+    """v3 新增：二维对照表（档位/价格/排期/参数）。列数固定、行数多时比卡片省空间。
+    字段：columns:[字符串], rows:[[字符串|数字]], caption?。单元格内容一律转义。
+    数字列用 tabular-nums + 不换行（.num），靠「单元格里是不是数字」判定，不改写数值。"""
+    cols = sec.get("columns") or []
+    rows = sec.get("rows") or []
+    if not cols or not rows:
+        return ""
+    is_num = [False] * len(cols)
+    for r_ in rows:
+        if not isinstance(r_, list):
+            continue
+        for j, cell in enumerate(r_[:len(cols)]):
+            if isinstance(cell, (int, float)) and not isinstance(cell, bool):
+                is_num[j] = True
+    p = ['<div class="tbl-wrap"><table class="tbl"><thead><tr>']
+    for c in cols:
+        p.append(f'<th>{esc(c)}</th>')
+    p.append('</tr></thead><tbody>')
+    for r_ in rows:
+        cells = r_ if isinstance(r_, list) else [r_]
+        p.append('<tr>')
+        for j in range(len(cols)):
+            cell = cells[j] if j < len(cells) else ""
+            cls = ' class="num"' if is_num[j] else ''
+            p.append(f'<td{cls}>{esc(cell)}</td>')
+        p.append('</tr>')
+    p.append('</tbody></table></div>')
+    if sec.get("caption"):
+        p.append(f'<div class="tbl-caption">{esc(sec["caption"])}</div>')
+    return "\n".join(p)
+
 def render_default_section(sec):
     p = []
     items = sec.get("content", []) or sec.get("items", [])
@@ -527,6 +597,21 @@ def render_default_section(sec):
             p.append(f'<li>{esc(kp)}</li>')
         p.append('</ul></div>')
     return "\n".join(p)
+
+# type → 渲染分支（唯一登记处）。新增类型必须先在这里出现，否则 import 即失败：
+# 避免「schema 里有、渲染分支没有 → 静默降级成 default」这类最难发现的漂移。
+RENDERERS = {
+    "default": render_default_section,
+    "timeline": render_timeline,
+    "compare": render_compare,
+    "pair": render_pair,
+    "architecture": render_architecture,
+    "flow": render_flow,
+    "quote": render_quote_section,
+    "list": render_list_section,
+    "table": render_table_section,
+}
+SC.assert_renderers(RENDERERS, "render_html")
 
 def render_barchart(sec):
     """v2 R3 量化机制条形对比（纯 CSS 色块条形）。可挂在任意 section 上（bars 字段）。
@@ -553,7 +638,10 @@ def render_barchart(sec):
     p = ['<div class="bar-chart">']
     for it in items:
         v = it["value"]
-        pct = v / mx * 100
+        # v3 §4.3：极小值必须有地板宽度。纯比例映射下 0.4/61 只有 0.65% ——
+        # 1280px 版面上约 5px，读者判定为"这项是 0"，等于把原文的关键反差讲丢了。
+        # 地板取 10%：够看见，又不至于让 0.4 看着像 6。0 值仍归 0（真空值就显示空）。
+        pct = (0 if v <= 0 else max(v / mx * 100, 10))
         tc = it.get("tone", "")
         cls = f"bar-row {tc}" if tc else "bar-row"
         disp = it["text"] if it["text"] else (f"{v:g}" if v else "")
@@ -646,7 +734,11 @@ def render_html(data, theme):
     theme_attr = f'data-theme="{theme}"' if theme == "light" else ""
     parts = [f'<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">']
     parts.append('<meta name="viewport" content="width=device-width, initial-scale=1.0">')
-    parts.append(f'<title>{esc(data.get("title",""))}</title><style>{css}</style></head><body {theme_attr}>')
+    parts.append(f'<title>{esc(data.get("title",""))}</title>')
+    # v3 §4.1：给 <html> 打 `.js` 标记，所有「进场前隐藏」的样式只在有 JS 时生效。
+    # 写在 <style> 之前、body 之前，避免首帧闪一下再收回去（FOUC）。
+    parts.append('<script>document.documentElement.className+=" js";</script>')
+    parts.append(f'<style>{css}</style></head><body {theme_attr}>')
     # 背景粒子（DESIGN-SPEC §4.3）
     parts.append('<div class="bg-particles"><span></span><span></span><span></span><span></span><span></span><span></span></div>')
     parts.append(nav_html)
@@ -663,8 +755,24 @@ def render_html(data, theme):
     parts.append('</main>')
     parts.append(render_footer(data))
     # 主题切换 JS（明暗随时切，偏好存 localStorage，与阅读版一致）
+    # + v3 §4.2：条形图滚动进场（IntersectionObserver）。JS 只做"加类"，
+    #   宽度仍由 CSS 的 --w 决定，不用 JS 改 style.width（历史翻车：改宽度那条 transition
+    #   在部分内核里测到 0，条永远不生长）。IO 不可用时直接给终态（.js 门控已被 CSS 兜住）。
     parts.append(
         '<script>'
+        'function observeCharts(){'
+        '  var charts=document.querySelectorAll(".bar-chart");'
+        '  if(!charts.length)return;'
+        '  if(!("IntersectionObserver" in window)||!window.IntersectionObserver){'
+        '    charts.forEach(function(c){c.classList.add("in")});return;'
+        '  }'
+        '  var io=new IntersectionObserver(function(es){'
+        '    es.forEach(function(e){'
+        '      if(e.isIntersecting){e.target.classList.add("in");io.unobserve(e.target);}'
+        '    });'
+        '  },{threshold:0.2,rootMargin:"0px 0px -8% 0px"});'
+        '  charts.forEach(function(c){io.observe(c)});'
+        '}'
         'function toggleTheme(){'
         '  var b=document.body;'
         '  var isDark=b.getAttribute("data-theme")!=="light";'
@@ -690,20 +798,71 @@ def render_html(data, theme):
         '  }catch(e){}'
         '  updateToggleIcon();'
         '});'
+        # 本脚本在 </body> 前，DOM 已解析完 → 立即启动滚动监听，不等 DOMContentLoaded，
+        # 也不让主题代码的异常连带影响图表（各自 try/catch）。
+        'try{observeCharts()}'
+        'catch(e){document.querySelectorAll(".bar-chart").forEach(function(c){c.classList.add("in")})}'
         '</script>'
     )
     parts.append('</body></html>')
     html_out = "\n".join(parts)
-    # v2 §3.3 / §五：死锚点自检（导航 href 指向的 id 必须存在于文档中，否则 ERROR 拒渲染）。
-    # 从最终 HTML 里收集全部 id 与全部 # 内部锚点，逐一核对。
+    _selfcheck(data, html_out)
+    return html_out
+
+def _selfcheck(data, html_out):
+    """渲染后自检（v3 第六章）。原则：**"数据写了但没渲染出来"比样式瑕疵严重得多**——
+    前者读者看到的是"内容不存在"，且肉眼无法发现。故一律以 ERROR 拒交付。"""
+    errs = []
+    # 1) 死锚点（v2 §3.3 / §五）：导航 href 指向的 id 必须存在于文档中。
     _ids = set(re.findall(r'\bid="([^"]+)"', html_out))
     _hrefs = set(re.findall(r'href="#([^"]+)"', html_out))
     _dead = sorted(_hrefs - _ids)
-    if _dead:
-        for d in _dead:
-            print(f"ERROR: 导航死链接 `#{d}` 在文档中无对应 id（导航必须指向真实存在的章节锚点）。", file=sys.stderr)
+    for d in _dead:
+        errs.append(f"导航死链接 `#{d}` 在文档中无对应 id（导航必须指向真实存在的章节锚点）。")
+    # 2) 声明即渲染：section 里写了 bars/table，最终 HTML 必须出现对应构件。
+    #    字段名打错（bar / colums / row）会静默什么都不画，这是最难发现的一类。
+    n_bars = sum(1 for s in data.get("sections", [])
+                 if isinstance(s, dict) and (s.get("bars") or s.get("bar_chart")))
+    got_bars = html_out.count('<div class="bar-chart">')
+    if n_bars != got_bars:
+        errs.append(f"声明了 {n_bars} 组 bars 条形图，HTML 里只有 {got_bars} 个 .bar-chart（字段名或挂载位置有误）。")
+    n_tbl = sum(1 for s in data.get("sections", [])
+                if isinstance(s, dict) and s.get("type") == "table" and s.get("columns") and s.get("rows"))
+    got_tbl = html_out.count('<table class="tbl">')
+    if n_tbl != got_tbl:
+        errs.append(f"声明了 {n_tbl} 个 table 章节，HTML 里只有 {got_tbl} 个 <table class=\"tbl\">。")
+    # 3) 空章节：声明了内容字段、却什么都没画出来（字段名打错由校验器负责，这里抓
+    #    "键名对但值为空/形状不对导致渲染器跳过"）。
+    #    注意：只有 heading/desc 的"薄章节"是作者的内容选择，不是渲染缺陷，
+    #    校验器也放行——这里若判死，两个权威就互相矛盾了（正是本次要消灭的那类漂移）。
+    body = html_out.split("<main>", 1)[1].split("</main>", 1)[0] if "<main>" in html_out else ""
+    for i, sec in enumerate(data.get("sections", [])):
+        if not isinstance(sec, dict):
+            continue
+        frag = re.search(rf'<section id="sec{i}">(.*?)</section>', body, re.S)
+        if not frag:
+            errs.append(f"sections[{i}] 未在 <main> 中找到对应 <section id=\"sec{i}\">。")
+            continue
+        declared = [k for k in SC.known_section_keys(sec.get("type", "default"))
+                    if k not in ("type", "heading", "desc") and sec.get(k)]
+        if not declared:
+            continue  # 没有声明任何内容字段 → 薄章节，放行
+        inner = frag.group(1)
+        has_content = any(k in inner for k in
+                          ('std-card', 'timeline', 'compare', 'diagram', 'flow', 'qcard',
+                           'takeaway', 'bar-chart', 'tbl-wrap', 'grid2'))
+        if not has_content:
+            errs.append(f"sections[{i}]（{sec.get('heading','')!r}）声明了 {declared} 却渲染为空："
+                        f"type=`{sec.get('type','default')}` 与字段不匹配（配对表见 schema.py）。")
+    # 4) 条形可见性地板：非零值必须拿到 >= 10% 的宽度（v3 §4.3）。
+    bad_w = [w for w in re.findall(r'style="--w:([0-9.eE+-]+)"', html_out)
+             if float(w) > 0 and float(w) < 10]
+    if bad_w:
+        errs.append(f"条形宽度出现 {bad_w} 这类 <10% 且非 0 的值，极小值会被读成 0（应由 render_barchart 兜底）。")
+    if errs:
+        for e in errs:
+            print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
-    return html_out
 
 def main():
     ap = argparse.ArgumentParser(description="analysis.json → 单文件可视化 HTML（摘要版，不含逐字稿）")

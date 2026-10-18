@@ -14,20 +14,26 @@
 退出码:
   0 = 完全通过；1 = 存在 ERROR（不可渲染）；2 = 仅存在 WARN（可渲染，建议修）
 
-本校验器是唯一权威：render_html.py / read_render.py / run_pipeline.py 都以它为准。
-新增字段前必须先在 render_html.py 里实现渲染分支，再到这里登记 schema。
+本校验器是**结构合法性的唯一权威**：render_html.py / read_render.py / run_pipeline.py 都以它为准。
+类型与枚举的**定义**在 schema.py；本文件决定**怎样判定通过/不通过**。
+新增字段的顺序：schema 登记 → 本文件加校验 → render_html 加分支（漏第三步会在 import 期报错）。
+
+为什么枚举不在本文件维护：这里原先有一份硬编码白名单，注释写着「与 render_html.py 硬编码一致」——
+所谓一致靠人工维持，而同一套规则实际散在四处（渲染器分支 / 本白名单 / 起草提示词 / TASK.md 模板），
+必然漂移（本次就发现 TASK.md 少了一个类型）。现在四处都由 schema.py 生成或引用。
 """
 
-import argparse, json, sys, re, os
+import argparse, json, sys, re, os, difflib
 
-# ── 泛词（直接照搬 render_html.BAN_WORDS，保持一致）──
-BAN_WORDS = ["转写", "视频文案", "内容整理", "transcript", "未命名", "视频转写", "文本整理"]
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import schema as SC  # noqa: E402
 
-# ── 枚举白名单（与 render_html.py 硬编码一致）──
-FACT_TONES = {"", "acc", "green", "red", "warn", "purple"}
-SECTION_TYPES = {"default", "timeline", "compare", "pair", "architecture", "flow", "quote", "list"}
-TL_STATUS = {"default", "good", "warn", "danger"}
-FLOW_HIGHLIGHT = {None, "start", "end"}
+# ── 泛词 / 枚举白名单：唯一来源 schema.py（本文件保留同名引用，供既有调用方与可读性）──
+BAN_WORDS = SC.BAN_WORDS
+FACT_TONES = SC.FACT_TONES
+SECTION_TYPES = SC.SECTION_TYPES
+TL_STATUS = SC.TL_STATUS
+FLOW_HIGHLIGHT = SC.FLOW_HIGHLIGHT
 
 class R:
     def __init__(self):
@@ -64,13 +70,39 @@ def check_str_list(r, obj, key, required):
         else:
             r.err(f"`{key}[{i}]` 应为字符串或对象，实为 {type(it).__name__}")
 
+def check_unknown_keys(r, sec, idx, stype):
+    """抓「字段名打错」——这类错误最难发现，因为渲染器读不到就安静地什么都不画。
+    历史事故：写成 bar / colums / row，页面少一节内容，校验器却 0 error 通过。
+
+    分级：
+      - 与某个合法键**高度相似**（≥0.82）且带非空内容 → ERROR。这基本可以断定是想写那个键，
+        而内容确实不会出现在页面上，属于"数据丢了"级别。
+      - 其余不认识的键 → WARN（模型常带无害备注；判死会逼它删掉有用信息）。
+      - `_` 前缀视为作者注释，静默跳过（渲染器从不读 _ 开头的键）。
+    不做成 ERROR 的代价是"漏放行"，做成 ERROR 的代价是"误杀"——误杀更糟，所以阈值从严。
+    """
+    known = SC.known_section_keys(stype)
+    for k in sec:
+        if k in known or k.startswith("_"):
+            continue
+        strict = difflib.get_close_matches(k, sorted(known), n=1, cutoff=0.82)
+        soft = difflib.get_close_matches(k, sorted(known), n=2, cutoff=0.6)
+        hint = f"，是否想写 {' / '.join('`%s`' % x for x in (strict or soft))}" if (strict or soft) else ""
+        val = sec[k]
+        nonempty = bool(val) if isinstance(val, (list, dict, str)) else val is not None
+        if strict and nonempty:
+            r.err(f"sections[{idx}] 有不认识的键 `{k}`{hint}（这个键写了内容但渲染器读不到，页面上不会显示）")
+        else:
+            r.warn(f"sections[{idx}] 有不认识的键 `{k}`{hint}（合法键见 schema.known_section_keys）")
+
 def check_section(r, sec, idx):
     if not isinstance(sec, dict):
         r.err(f"sections[{idx}] 应为对象，实为 {type(sec).__name__}"); return
     check_str(r, sec, "heading", required=True, maxlen=40)
     check_str(r, sec, "desc", required=False)
     stype = sec.get("type", "default")
-    if stype not in SECTION_TYPES:
+    type_ok = stype in SECTION_TYPES
+    if not type_ok:
         r.err(f"sections[{idx}].type=`{stype}` 非法。允许：{sorted(SECTION_TYPES)}；缺省为 default。")
         stype = "default"
     # 各类型专用字段
@@ -154,6 +186,31 @@ def check_section(r, sec, idx):
                 check_str(r, c, "source", required=False)
     elif stype == "list":
         check_str_list(r, sec, "items", required=True)
+    elif stype == "table":
+        # v3 新增：二维对照表。渲染器按 columns 定宽铺 td，行长不齐会静默丢列，
+        # 所以列数一致性是 ERROR 而非 WARN。
+        cols = sec.get("columns")
+        if not isinstance(cols, list) or not cols:
+            r.err(f"sections[{idx}].columns 缺失或为空（table 至少 1 列）")
+        else:
+            for i, c in enumerate(cols):
+                if not isinstance(c, str):
+                    r.err(f"sections[{idx}].columns[{i}] 应为字符串，实为 {type(c).__name__}")
+        rows = sec.get("rows")
+        if not isinstance(rows, list) or not rows:
+            r.err(f"sections[{idx}].rows 缺失或为空（table 至少 1 行）")
+        else:
+            ncol = len(cols) if isinstance(cols, list) else 0
+            for i, rw in enumerate(rows):
+                if not isinstance(rw, list):
+                    r.err(f"sections[{idx}].rows[{i}] 应为数组（一行 = 一个单元格数组），实为 {type(rw).__name__}")
+                    continue
+                if ncol and len(rw) != ncol:
+                    r.err(f"sections[{idx}].rows[{i}] 有 {len(rw)} 格，columns 有 {ncol} 列，必须等长（空单元格写 \"\"）")
+                for j, cell in enumerate(rw):
+                    if not isinstance(cell, (str, int, float)):
+                        r.err(f"sections[{idx}].rows[{i}][{j}] 单元格应为字符串或数字，实为 {type(cell).__name__}")
+        check_str(r, sec, "caption", required=False)
     # v2 R3：bars 字段可挂在任意 type 上（量化机制条形图）；value 须为数字、label 为字符串
     bars = sec.get("bars")
     if bars is not None:
@@ -170,9 +227,20 @@ def check_section(r, sec, idx):
                     bt = b.get("tone", "")
                     if bt not in FACT_TONES:
                         r.err(f"sections[{idx}].bars[{i}].tone=`{bt}` 非法。允许：{sorted(FACT_TONES - {''})}")
+                    for bk in b:
+                        if bk not in ("label", "value", "text", "tone") and not bk.startswith("_"):
+                            # 条目的 tone 写错只丢颜色（样式降级），不到 ERROR
+                            r.warn(f"sections[{idx}].bars[{i}] 有不认识的键 `{bk}`（只认 label/value/text/tone）")
                 elif not isinstance(b, (int, float)):
                     r.err("sections[%d].bars[%d] 应为 {label,value,tone?} 对象或数字，实为 %s" % (idx, i, type(b).__name__))
         check_str(r, sec, "bar_note", required=False)
+    # 兜底：任何「写了但渲染器读不到」的键都要出声。
+    # type 本身已非法时跳过——那时按 default 的键集比对会产生一堆无关噪音。
+    if type_ok:
+        check_unknown_keys(r, sec, idx, stype)
+    # R6 一节一图：bars 与 table 同时出现在一个 section → 两个图互相抢注意力，判 WARN
+    if (sec.get("bars") or sec.get("bar_chart")) and stype == "table":
+        r.warn(f"sections[{idx}] 同时用了 table 与 bars（R6 一节一图：拆成两节，或只留更能说明问题的那个）")
 
 def check_timestamp(r, key_takeaways):
     # key_takeaways 里若有 [mm:ss] 时间戳，必须是合法格式（尽力而为，非强断）
