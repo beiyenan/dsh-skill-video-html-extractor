@@ -12,7 +12,7 @@
 用法: python3 extract_audio.py <输入文件> <输出.wav>
 退出码: 0 成功(拿到 16k mono WAV); 1 失败(stderr 给出原因与下一步建议)
 """
-import os, sys, shutil, struct, wave, subprocess
+import os, sys, shutil, struct, wave, subprocess, glob
 
 def has(name):
     """只找指定的可执行文件（不能拿 ffprobe 顶替 ffmpeg：两者参数集不同）。"""
@@ -86,10 +86,66 @@ def main():
     #    libandroid-support.so 等，且需 libtermux-exec-ld-preload.so 修正 linker 路径）。
     ffmpeg = has('ffmpeg')
     env = dict(os.environ)
+
+    # 0a) 自动自愈（两级）：usr/bin/ffmpeg 缺失时——
+    #     第 1 级：从共享目录 /sdcard/Download/dsh-backup/toolchain-deps 离线解包 deb
+    #             （该目录在共享存储上，DSH 升级/重装不会动它）；
+    #     第 2 级：共享目录也没了（换机/清过 Download）→ 用本机 apt 从 Termux 镜像
+    #             联网下载 ffmpeg 及全部依赖 deb，再解包平移（~80MB，需网络）。
+    #     只在文件确实缺失时触发，且失败静默回退到降级路径（不阻断流程）。
+    def _install_debs(prefix, deb_paths):
+        """解包 deb 到 prefix（deb 内含 data/data/com.termux/files/usr/... 需平移一层）。"""
+        import subprocess as _sp
+        dpkg_deb = os.path.join(prefix, 'bin', 'dpkg-deb')
+        for deb in sorted(deb_paths):
+            _sp.run([dpkg_deb, '-x', deb, prefix], capture_output=True, timeout=300)
+        staged = os.path.join(prefix, 'data', 'data', 'com.termux', 'files', 'usr')
+        if os.path.isdir(staged):
+            _sp.run(['cp', '-r', staged + '/.', prefix + '/'], capture_output=True, timeout=300)
+            _sp.run(['rm', '-rf', os.path.join(prefix, 'data')], capture_output=True, timeout=120)
+        return os.path.isfile(os.path.join(prefix, 'bin', 'ffmpeg'))
+
+    def _auto_heal_ffmpeg(prefix):
+        if os.path.isfile(os.path.join(prefix, 'bin', 'ffmpeg')):
+            return False
+        # 第 1 级：本地共享仓库
+        dep_dirs = ['/storage/emulated/0/Download/dsh-backup/toolchain-deps',
+                    '/sdcard/Download/dsh-backup/toolchain-deps']
+        dep_dir = next((d for d in dep_dirs if os.path.isdir(d) and glob.glob(os.path.join(d, '*.deb'))), None)
+        try:
+            if dep_dir:
+                print(f"INFO: ffmpeg 缺失，从共享目录自愈安装（{dep_dir}）...")
+                return _install_debs(prefix, glob.glob(os.path.join(dep_dir, '*.deb')))
+            # 第 2 级：联网下载（本机 apt + Termux 镜像，~80MB）
+            print("INFO: ffmpeg 缺失且本地无 deb 仓库，联网下载自愈（Termux 镜像，约 80MB）...")
+            import subprocess as _sp
+            apt_get = os.path.join(prefix, 'bin', 'apt-get')
+            apt_env = dict(os.environ)
+            apt_env['TERMUX__PREFIX'] = prefix
+            apt_env['PREFIX'] = prefix
+            # 全新恢复的环境可能没有软件包列表缓存，先 update（失败不致命，install 会再报）
+            _sp.run([apt_get, 'update'], capture_output=True, text=True, timeout=600, env=apt_env)
+            r = _sp.run([apt_get, 'install', '-y', '--download-only', 'ffmpeg'],
+                        capture_output=True, text=True, timeout=900, env=apt_env)
+            if r.returncode != 0:
+                print(f"WARN: apt 下载失败（{(r.stderr or r.stdout)[-200:]}）", file=sys.stderr)
+                return False
+            debs = glob.glob(os.path.join(prefix, 'var', 'cache', 'apt', 'archives', '*.deb'))
+            if not debs:
+                return False
+            ok = _install_debs(prefix, debs)
+            _sp.run(['rm', '-f'] + debs, capture_output=True, timeout=60)  # 清 apt 缓存，防重复装旧版
+            return ok
+        except Exception as e:
+            print(f"WARN: 自愈失败（{e}），回退降级路径", file=sys.stderr)
+            return False
+
     if not ffmpeg:
         for cand in ('/data/data/com.dsharnessmobile.shell/files/usr',
                      '/data/user/0/com.dsharnessmobile.shell/files/usr'):
             cand_bin = os.path.join(cand, 'bin', 'ffmpeg')
+            if not os.path.isfile(cand_bin):
+                _auto_heal_ffmpeg(cand)
             if os.path.isfile(cand_bin):
                 env['LD_LIBRARY_PATH'] = os.path.join(cand, 'lib')
                 env['LD_PRELOAD'] = os.path.join(cand, 'lib/libtermux-exec-ld-preload.so')
