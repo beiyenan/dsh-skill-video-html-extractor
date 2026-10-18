@@ -26,12 +26,16 @@ from llm_calibrate import (zhipu_chat, extract_json, load_key, log,  # noqa: E40
                            AuthError, NoQuota, TransientError, RateLimitedError, RATE_WAIT)
 import time  # noqa: E402
 
+import schema as SC  # noqa: E402
+
+# 【sections 类型与字段配对】整块由 schema 生成——提示词里那份"自然语言副本"
+# 是历史上最容易静默漂移的地方（改了渲染器忘了改这里，模型就会输出校验器不认的字段）。
 SYS_PROMPT = """你是视频内容结构化编辑。给你一份视频转写校正稿，你要输出一个完整的 analysis.json（内容结构化描述），供两个 HTML 渲染器使用。
 
 【硬性红线】
 - 只使用校正稿里的事实/数字/人名，禁止编造；数字必须能在校正稿里找到出处。
 - 金句引用保持原样（原话），不篡改。
-- title：具体、可检索、≤30 字；禁用泛词（转写/视频文案/内容整理/transcript/未命名/视频转写/文本整理）。
+- title：具体、可检索、≤30 字；禁用泛词（""" + "/".join(SC.BAN_WORDS) + """）。
 - reader_highlights：8–15 条，每条 4–30 字，必须【逐字摘自校正稿】（一个字都不能改，含标点，连补主语/换同义词都不行）；挑含金量最高的核心概念定义、关键结论、金句、重要数字表述；禁止挑「首先/所以/但是」这类过渡词。校验器会逐条回原文比对，找不到的会被打回。
 - key_takeaways：5–10 条，desc 末尾带 [mm:ss] 时间戳，时间戳必须来自校正稿里出现过的行首时间戳。
 - 只输出一个合法 JSON 对象：不要代码块围栏、不要任何解释文字、不要省略号。
@@ -45,7 +49,7 @@ SYS_PROMPT = """你是视频内容结构化编辑。给你一份视频转写校�
   "title": "字符串",
   "tone": "语气（教程/访谈/演讲/新闻/…）",
   "summary": "核心观点（见上方写法要求）",
-  "hero_facts": [{"value": "冲击性数字", "label": "一句话说明（label 里不要重复 value 的数字）", "tone": "acc|green|red|warn|purple"}],
+  "hero_facts": [{"value": "冲击性数字", "label": "一句话说明（label 里不要重复 value 的数字）", "tone": \"""" + SC.tone_list() + """\"}],
   "sections": [ {"type": "…", "heading": "≤40字", "desc": "可选", …按类型配字段…} ],
   "key_takeaways": [{"title": "…", "desc": "…… [mm:ss]"}],
   "reader_highlights": ["逐字短语", "…"],
@@ -54,24 +58,17 @@ SYS_PROMPT = """你是视频内容结构化编辑。给你一份视频转写校�
   "footer": {"calibration": "（留空字符串即可，由终审填写）"}
 }
 
-【sections 类型与字段配对】（6–10 个章节，按内容本质选类型，不要全堆成 default）
-- default：普通论述 → content:[字符串或{"title","desc"}]
-- timeline：时序历程 → items:[{"year"?,"title","desc"?,"status": default|good|warn|danger}]
-- compare：前后/好坏对照 → old_title, old:[…], new_title, new:[…]
-- pair：痛点-解法 → pains:[{"title","desc"?,"quote"?}], fixes:[同构]
-- architecture：结构/组织 → node_title, cols:[{"role","title","items"?,"nope"?}]
-- flow：流程/流向 → steps:[{"title","sub"?,"highlight"?}]（highlight 只允许 start/end）
-- quote：金句集 → cards:[{"text","source"?}]
-- list：清单/条目 → items:[{"title","desc"?}]
-判断口诀：时序→timeline、对比→compare、痛点解法→pair、结构→architecture、流向→flow、观点句→quote、清单→list、其余→default。
+""" + SC.section_pairing() + """
 
 【结构规则（v2，务必遵守，可显著减少返工）】
 - R1 叙事钩子前置：原稿若含真实人物事件/案例故事，必须用 timeline 呈现该故事，并放在 Hero 之后、理论性章节之前（让读者先产生疑问再进入机制解释）。纯场景描写不算故事，无需 timeline。
 - pair 收紧：仅当「痛点」与「解法」真实一一对应时才用 pair；纯解释性内容不得伪装成解法。拿不准就用 default。
 - R2 数据对比成节：强对比数据（如 A 61% vs B 19%）优先用 compare 或 bars 集中呈现，不要拆散到多处。
-- R3 量化机制可视化：章节里出现倍数、参照点、增减对比等「可计算」数据时，给该 section 加 "bars": [{"label","value":数字,"text"?:显示文案,"tone"?:acc|green|red|warn|purple}]，可再加 "bar_note"。bars 可挂在任意 type 的 section 上。bars 里的数字同样必须出自校正稿。
+- R3 量化机制可视化：章节里出现倍数、参照点、增减对比等「可计算」数据时，给该 section 加 "bars": [{"label","value":数字,"text"?:显示文案,"tone"?:""" + SC.tone_list() + """}]，可再加 "bar_note"。bars 可挂在任意 type 的 section 上。bars 里的数字同样必须出自校正稿。
 - R4 全文去重：同一金句、同一数字、同一结论在全页只出现一次。分工：hero_facts 承载记忆点数字，summary/key_takeaways 不再重复这些数字（改用「七成」「五大」等中文表述或不提数字）；金句只放 conclusion.cards，sections 里不要再设 quote 型章节复述同样的句子。
 - R5 解法挂钩机制：若解法是从机制推导的，解法里显式标注对应机制（如「帮急不帮穷 ← 享乐适应」）。
+- R6 一节一图：一个 section 最多一个可视化构件（bars 或 table 二选一）；构件下方最多一行说明文字，说明只补充"这数哪来的"，不要复述图里已有的内容。
+- R7 选型优先级：同一份数据能做成 bars 也能做成 table 时，先看差异是否靠"长短"表达——是就 bars，否（是多列属性）就 table；两者都不合适才用 compare/卡片。
 
 【质量要求】
 - hero_facts 3–6 个，挑全文最冲击的数字做读者记忆锚点。

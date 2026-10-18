@@ -1,6 +1,6 @@
 ---
 name: video-html-extractor
-description: 从用户上传的音/视频文件提取文案（语音转文字），转成结构化后生成两版单文件 HTML——摘要版（8 种视觉组件混合排版）与阅读版（分段排版、字号/字体/主题可调），并按文案主题自动命名。适用用户上传 .mp4/.mov/.mkv/.mp3/.wav/.m4a/.flac/.ogg 并要求「提取文案」「转成文字」「做成网页/HTML」「可视化」「整理内容」的场景。
+description: 从用户上传的音/视频文件提取文案（语音转文字），转成结构化后生成两版单文件 HTML——摘要版（9 种视觉组件混合排版）与阅读版（分段排版、字号/字体/主题可调），并按文案主题自动命名。适用用户上传 .mp4/.mov/.mkv/.mp3/.wav/.m4a/.flac/.ogg 并要求「提取文案」「转成文字」「做成网页/HTML」「可视化」「整理内容」的场景。
 ---
 
 # 视频文案提取 → 两版可视化 HTML
@@ -84,12 +84,15 @@ python3 <skill_dir>/scripts/run_pipeline.py prepare <输入文件> [--workers 3]
    - `tone` / `summary` / `hero_facts`(3–6 个记忆点数字) / `sections`(6–10) / `key_takeaways`(5–10，带 [mm:ss] 引用) / `conclusion` / `entities` / `footer.calibration`。
    - `reader_highlights`：8–15 条阅读版金色高亮短语，**逐字摘自校正稿**（4–30 字）。只挑含金量最高的：核心概念定义、关键结论、金句、重要数字表述；禁止「首先/所以/但是」类过渡词。每条全文仅在首次出现处高亮。校验器会 WARN 报原文找不到的条目。
    - **`summary` 必须写「核心观点」，不是「内容摘要」**。3–5 句话，只保留：① 文案的中心论点（1 句，可加引号原文）；② 支撑论点的 2–3 个关键数字/数据；③ 一句行动指令或结论。**不要写「博主用 X 经历切入」「后来他读到 Y」「由此他给出 Z」「结尾邀请观众 W」这类叙事流水账**——视频讲了什么、谁说的、怎么转折的，全都不进 summary，这些留给 `sections` 和 `key_takeaways` 去讲。读者打开 HTML 第一眼看到的 summary 是「文案本身在讲什么」，不是「视频怎么讲的」。例：原文核心是「人是需要间歇性堕落的，精力管理比时间管理更重要」，那 summary 就写「间歇性堕落是自救：人就像弹簧……老教授 5+2 / 6+1……有效工作时间只有 4 小时，用 20% 有效时间干 20% 最重要的事」，不写「博主傻白用高三经历切入、崩溃后读了一篇文章」。
-   - `sections` 的 `type` 按内容本质选并配对该字段：`timeline`(时序)/`compare`(对比)/`pair`(痛点解法)/`architecture`(结构)/`flow`(流向)/`quote`(金句)/`list`(清单)/`default`(论述)。**不要全堆成 default。** 具体字段形状看 `examples/analysis.example.json` 与 TASK.md。**v2 选择指引（R 系列）**：
+   - `sections` 的 `type` 按内容本质选并配对该字段：`timeline`(时序)/`compare`(对比)/`pair`(痛点解法)/`architecture`(结构)/`flow`(流向)/`quote`(金句)/`list`(清单)/`table`(二维对照)/`default`(论述)。**不要全堆成 default。** 具体字段形状看 `examples/analysis.example.json` 与 TASK.md；**权威清单在 `scripts/schema.py`**（枚举、字段配对、图标都在那一处，提示词与校验器都从它生成）。**选择指引（R 系列）**：
      - **R1 叙事钩子前置**：原稿若含真实人物事件/案例故事，必须在 Hero 之后、理论章节之前用 `timeline` 呈现"开篇故事"（让读者先产生疑问再进机制）；无叙事素材可跳过。这是 v1 产出最常漏用的——强叙事被压进 list/default，丢了故事钩子。
      - **R2 数据支撑独立成节**：支撑中心论点的调查/研究数据（非首屏 hero_facts）集中一个 `default` 或 `compare` 章节；强对比数据（如长期 61% vs 一次性 19%）用 `compare` 呈现，**不得拆成两张平铺卡**。
      - **R3 量化机制可视化**：原文带倍数/参照点/增减对比等"可计算"机制时，用 section 的 `bars` 字段（`[{label,value,text?,tone?}]` + `bar_note?`）渲染纯 CSS 条形图（`.bar-chart`），数字仍须可回溯原文。
      - **R4 全文去重**：同一金句/数据/结论全页只出现一次。sections 讲"机制与故事"，takeaways 只留一句式"结论条目"（带时间戳但不复述细节）。校验器对重复金句/重复数据点/sections↔takeaways 逐字复述给 WARN。
      - **R5 解法与机制挂钩**：若解法从机制推导，解法区显式标注对应机制（如"帮急不帮穷 ← 享乐适应/参照点"），形成"机制→解法"闭环。
+     - **R6 一节一图**：一个 section 最多一个可视化构件（`bars` 与 `table` 二选一），构件下方说明最多一行、只补"这数哪来的"不复述图内内容。两个图挤一节，读者两个都读不进去。
+     - **R7 选型优先级**：同一份数据能做 `bars` 也能做 `table` 时，先看差异是否靠"长短"表达——是就 `bars`，否（多列属性：档位/价格/排期/参数）就 `table`；都不合适才退回 `compare`/卡片。拿不准就用 `default`（选错构件会让信息变形，`default` 至少不撒谎）。完整选型矩阵见 `DESIGN-SPEC.md` §2.4。
+     - **table 字段形状**：`columns:[字符串]` + `rows:[[单元格…]]`，**每行长度必须等于 columns 长度**（空单元格写 `""`，不等长是 ERROR）；`caption?` 一行说明。单元格写字符串或纯数字，不要塞对象。
      - **pair 使用前提收紧**：仅当痛与解真实一一对应时用 `pair`；纯解释性内容不得伪装成"解法"（v1 的痛点3条+伪解法3条平铺即反例）。
 4. **红线**：只改高置信度错；不改观点/数字量级/不加事实；金句原样加引号；**所有数字必须能在 transcript.txt 找到出处，禁止编造**（校验器兼容中文数字：原文「二零一九」= JSON「2019」，「三家」= 3，不会误报）；**不要把原文说法「雅化」成原文没有的短语**（校验器查不出，交差前人工抽查 `summary`/`key_takeaways`/`quote` 里的短语，拿不准回 `transcript.txt` 搜）。
 5. **通顺度**：转写稿可能含 ASR 把开场音乐/噪音误输出的句首杂字（如「等」）。终审校正稿时若该字使句首不通且无实义，应删除以恢复通顺。这与「拒绝雅化」不冲突——雅化是改写实义措辞，删除句首无义杂字仅是修正 ASR 噪音。
@@ -122,7 +125,7 @@ python3 <skill_dir>/scripts/run_pipeline.py finish <输入文件> [--theme dark|
 ```
 
 先校验（仅 ERROR 拒渲染，WARN 放行），再按 `DESIGN-SPEC.md` 的设计规范生成两版 HTML：
-- **摘要版** `<title>_摘要版.html`：8 种视觉组件混合（可挂 `.bar-chart` 条形图，R3）。**不含逐字稿**（校正稿以 `<title>_校正稿.txt` 独立文件交付，不再内嵌到 HTML）。**默认深色主题**（DESIGN-SPEC 核心目标：深色主题 + 渐变红金强调 + 毛玻璃卡片 + 入场/悬浮/背景粒子动效 + 响应式网格）。**导航栏右上角带明暗主题切换按钮**（太阳/月亮图标，点一下换主题，偏好存 `localStorage` 键 `dsh_theme`，下次打开沿用）。**导航为每个主要章节提供锚点**（v2 导航完整性），**页脚校正说明与实体列表默认折叠**（`<details><summary>`，点开可见；生成声明不折叠）。
+- **摘要版** `<title>_摘要版.html`：9 种视觉组件混合（可挂 `.bar-chart` 条形图，R3）。**不含逐字稿**（校正稿以 `<title>_校正稿.txt` 独立文件交付，不再内嵌到 HTML）。**默认深色主题**（DESIGN-SPEC 核心目标：深色主题 + 渐变红金强调 + 毛玻璃卡片 + 入场/悬浮/背景粒子动效 + 响应式网格）。**导航栏右上角带明暗主题切换按钮**（太阳/月亮图标，点一下换主题，偏好存 `localStorage` 键 `dsh_theme`，下次打开沿用）。**导航为每个主要章节提供锚点**（v2 导航完整性），**页脚校正说明与实体列表默认折叠**（`<details><summary>`，点开可见；生成声明不折叠）。
 - **阅读版** `<title>_阅读版.html`：校正稿分段排版，A-/A+ 字号、4 款字体、亮暗主题，偏好存 localStorage。**默认深色**；`finish` 的 `--theme light` 同时作用于摘要版与阅读版（两版初始主题一致），页内按钮仍可随时切换。**阅读版高亮（`.para strong`）颜色：暗色主题金黄色 `#f5c518`，亮色主题天蓝色 `#00a6e6`**（CSS 用 `html[data-theme="light"] .para strong{color:#00a6e6}` 覆盖；只改高亮文字，不改标题/分隔线的 `--grad-b` 渐变）。
 
 **render 后自动重命名**：`finish` 渲染完两版 HTML 后，将 `transcript_calibrated.txt` 重命名为 `<title>_校正稿.txt`（文件名与 HTML 保持同一前缀）。原始逐字稿 `transcript.txt` 不重命名，而是由清理步骤自动删除。
@@ -181,9 +184,9 @@ python3 <skill_dir>/scripts/run_pipeline.py finish <输入文件> [--theme dark|
 |------|------|
 | 主题 | 深色默认（底色 `#1a1a2e`）；`--theme light` 回落亮色 |
 | 强调色 | 红 `#e94560` + 金 `#f5c518` 渐变；价值/数字用金色 |
-| 卡片 | Glassmorphism：`rgba(255,255,255,0.06)` 背景 + `backdrop-filter:blur(10px)` + `rgba(255,255,255,0.1)` 细边框 + `border-radius:16px` + `0 8px 32px rgba(0,0,0,0.3)` 阴影 |
-| 动效 | `fadeInUp` 入场（stagger 0.1s 增量）+ `float` 背景粒子（6 个，`z-index:-1`）+ `pulse` 流程箭头 + `bounce` 滚动指示 + `barGrow` 条形生长（R3，`transform:scaleX`） |
-| 组件 | 8 种 section + **条形对比 `.bar-chart`（R3）**：挂任意 section 的 `bars` 字段，纯 CSS 色块条形，数值用 `--w` 驱动 `transform:scaleX()`（只用 transform/opacity，遵守 §9.2） |
+| 卡片 | Glassmorphism：`rgba(38,41,66,0.88)` 深色底（**必须近乎不透明以遮住背景粒子**，旧值 `rgba(255,255,255,0.06)` 会让 300px 色块糊在正文上）+ `backdrop-filter:blur(10px)` + `rgba(255,255,255,0.1)` 细边框 + `border-radius:16px` + `0 8px 32px rgba(0,0,0,0.3)` 阴影；亮色主题用纯白 |
+| 动效 | `fadeInUp` 入场（stagger 0.1s 增量）+ `float` 背景粒子（6 个，`z-index:-1`）+ `pulse` 流程箭头 + `bounce` 滚动指示 + `barGrow` 条形生长（R3，`transform:scaleX`，**由 IntersectionObserver 滚动进场触发**，非页面加载时播完）+ **`prefers-reduced-motion` 下逐个还原终态**（见 DESIGN-SPEC §4.5④） |
+| 组件 | 9 种 section（含 `table` 二维对照）+ **条形对比 `.bar-chart`（R3）**：挂任意 section 的 `bars` 字段，纯 CSS 色块条形，数值用 `--w` 驱动 `transform:scaleX()`（只用 transform/opacity，遵守 §9.2）。**极小值有 10% 地板宽度**（真 0 仍为 0），`--w` 带 fallback。类型清单与字段配对的权威定义在 `scripts/schema.py` |
 | 主题切换 | 导航栏最右 38×38 圆形毛玻璃按钮（§3.1.1）：摘要版太阳/月亮 SVG 挂 `body[data-theme]`、localStorage 键 `dsh_theme`；阅读版太阳 SVG 挂 `html[data-theme]`、localStorage 键 `theme`；两版默认深色、`--theme light` 回落亮色 |
 | 导航 | **导航完整性（v2）**：为每个主要 section 提供锚点（hero + 各章节 + 要点 + 金句），锚点文字用章节 heading；无死链接（渲染后自检 `href→id`，缺失 ERROR 拒渲染） |
 | 响应式 | 768px 断点：卡片单列、流程图纵向（箭头 90°）、**导航链接横向滚动（非隐藏，主题按钮保留贴右）**、条形图标签转上方 |

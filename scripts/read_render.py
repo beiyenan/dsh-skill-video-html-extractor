@@ -98,7 +98,9 @@ def render_html(paragraphs, title, theme, source_note="所有文字来自原始�
   --primary:#1a1a2e;--secondary:#16213e;
   --highlight:#e94560;--gold:#f5c518;
   --bg:#1a1a2e;--bg2:#16213e;
-  --card:rgba(255,255,255,0.06);--card2:rgba(255,255,255,0.04);
+  /* v3 §4.9：--card 用于顶栏控件与字号下拉菜单，它们浮在正文之上。
+     0.06 的白透明度等于没有遮罩，下拉菜单展开时正文会直接透出来糊成一团。 */
+  --card:rgba(38,41,66,0.94);--card2:rgba(255,255,255,0.08);
   --line:rgba(255,255,255,0.1);--card-border:rgba(255,255,255,0.1);
   --txt:#f0f0f0;--muted:#b0b0b0;--dim:#888;
   --accent:#e94560;--accent2:#00d9ff;--warn:#f5c518;
@@ -139,6 +141,13 @@ html[data-theme="light"] .bg-particles span{background:rgba(47,107,255,0.06)}
   0%,100%{transform:translateY(0) rotate(0deg);opacity:.5}
   33%{transform:translateY(-28px) rotate(120deg);opacity:.75}
   66%{transform:translateY(18px) rotate(240deg);opacity:.35}
+}
+/* v3 §4.6：减弱动效偏好下关掉背景粒子与过渡。
+   阅读版没有"进场前隐藏"的元素，所以这里只需停动画，不需要还原终态。 */
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+  html{scroll-behavior:auto!important}  /* !important：本块在首段 CSS，晚于它的 html{scroll-behavior:smooth} 会覆盖无标记声明 */
+  .bg-particles{display:none}
 }
 """
     parts.append(css)

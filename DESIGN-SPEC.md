@@ -87,6 +87,37 @@ margin: 0 auto;               /* 水平居中 */
 
 Hero 区域特殊处理：`min-height: 100vh` + `padding: 120px 20px 80px`（顶部留出导航栏空间）。
 
+### 2.4 可视化选型矩阵（v3 新增）
+
+内容层决定用哪种构件。先看数据的**形状**，再挑组件——不要先挑组件再塞内容。
+
+| 数据形状 | 首选构件 | section type / 字段 | 判据 |
+|---|---|---|---|
+| 同一指标、多个对象比大小 | 条形图 | 任意 type + `bars` | 差异靠"长短"就能读出来 |
+| 同一指标、含极小值（<最大项 10%） | 条形图（带地板宽度） | `bars` | 见 §7.7 约束①：极小值不能被读成 0 |
+| 两个时间点/两种做法的条目对照 | 对比卡 | `compare` | 两组、条目式、互相排斥 |
+| ≥2 列属性、逐行同结构（档位/价格/排期/参数） | 表格 | `table` + `columns`/`rows` | 需要**横向对齐**才能比较 |
+| 有先后顺序的事件/演进 | 时间线 | `timeline` | 顺序本身是信息 |
+| 因果链/步骤流转 | 流程图 | `flow` | 强调"从哪到哪" |
+| 痛点与其对应解法 | 配对卡 | `pair` | 必须真实一一对应，否则用 default |
+| 组织/分层结构 | 架构图 | `architecture` | 有并列的"面" |
+| 一条一段话的观点集合 | 清单 / 卡片 | `list` / `default` | 无法压缩成同一维度比较 |
+| 原话、结论句 | 金句卡 | `quote` / `conclusion.cards` | 措辞本身就是价值 |
+
+**三条冲突裁决规则**
+
+- **R6 一节一图**：一个 section 最多一个可视化构件（`bars` 与 `table` 二选一）。两个图挤在一节里，读者两个都读不进去。构件下方说明最多一行，只补充"这数哪来的"，不复述图里已有内容。
+- **R7 长短优先**：同一份数据既能做 `bars` 又能做 `table` 时，先看差异是否靠"长短"表达——是就 `bars`；否则（是多列属性）用 `table`；两者都不合适才退回 `compare`/卡片。
+- **宁少勿多**：拿不准用哪个，用 `default`。构件选错会让信息变形（把表格拆成卡片就丢了横向对比），而 `default` 至少不撒谎。
+
+### 2.5 数字可视化前置检查
+
+任何要画进图里的数字，先确认三件事（校验器 `validate_analysis.py` 会逐条拦）：
+
+1. 能在校正稿里找到出处（阿拉伯数字与中文数字都算，如"六成"↔"60%"）；
+2. `value` 是**纯数字**，展示文案放 `text`（`{"value":0.4,"text":"0.4%"}`，不要写 `"value":"0.4%"`）；
+3. 同一数字全页只出现一次（R4 去重）——首屏 `hero_facts` 已承载的记忆点数字，正文与要点里改用中文表述或不提。
+
 ---
 
 ## 三、组件设计模式
@@ -349,6 +380,82 @@ function toggleTheme(){
 }
 ```
 
+### 4.5 健壮性硬规则（v3 新增，逐条来自实测）
+
+> 共同教训：**动画是可选增强，可见性是必须保证的底线。**
+> 任何"等 JS / 等动画 / 等某个变量才显形"的写法，都要先回答"它失败时读者看到什么"。
+
+**① 默认态 = 终态，动画态由 `.js` 门控**
+
+给元素加"进场前隐藏"（`opacity:0` / `scaleX(0)`）之前，先问：JS 挂了、被禁了、IntersectionObserver 没触发，这个元素还会不会出现？
+
+```html
+<script>document.documentElement.className+=" js";</script>   <!-- 在 <style> 之前 -->
+```
+```css
+.bar-fill{transform:scaleX(calc(var(--w,100)/100))}  /* 无 JS：直接终态 */
+.js .bar-fill{transform:scaleX(0)}                   /* 有 JS：才允许从 0 长 */
+.js .bar-chart.in .bar-fill{animation:barGrow .9s ... forwards}
+```
+
+⚠️ 这条规则是**对"我们新引入的 JS 依赖"的兜底**，不是说旧代码有 bug。旧写法 `scaleX(0) + animation ... forwards` 本身不依赖 JS（动画自动播完停在终态），所以旧页面不会白屏——它的问题是**动画在加载时就跑完了**（见 ③）。一旦为了修 ③ 而改成"滚动到才播"，就产生了真正的 JS 依赖，此时 ① 变成必须。规则要连着看：**先决定要不要滚动触发，再决定要不要 `.js` 门控。**
+
+**② 不要用「transition + JS 改宽度」做条形生长**
+
+实测翻车：`width:0` + `transition` + IO 回调里 `el.style.width = el.dataset.w`，结果量到 `meter 500px -> 0`，条永远是零宽。原因是回调读属性的时机与 transition 起始帧打架，不同内核实盘行为不一致。
+正确做法：终态宽度写死在 CSS 变量里（`--w`），动画只动 `transform`。JS 只负责加一个类。
+
+**③ 动画要滚动触发，不要在页面加载时跑完**
+
+`animation:barGrow .9s forwards` 直接挂在元素上 → 首屏渲染时动画即播完 → 读者滚到那一节看到的是静止的条，"生长"这个信息（"这项比那项多得多"）就丢了。用 `IntersectionObserver` 在 `.bar-chart` 进入视口时加 `.in`；IO 不存在时直接给全部元素加 `.in`（退化成 ③ 之前的行为，仍然可见）。
+
+**④ `prefers-reduced-motion` 必须还原"终态"，不能只写 `animation:none`**
+
+只写 `animation:none` 会让元素退回**基础规则的状态**——在 ① 的写法下那就是 `scaleX(0)`，即"关闭动画导致内容消失"，比不写这条规则更糟。
+
+```css
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+  html{scroll-behavior:auto!important}                                     /* 见下方说明 */
+  .hero h1,.hero .sub,.facts{animation:none;opacity:1;transform:none}   /* 逐个还原终态 */
+  .js .bar-fill{transform:scaleX(calc(var(--w,100)/100))}
+  .js .bar-chart.in .bar-fill{animation:none}
+  .bg-particles{display:none}
+}
+```
+注意 `html{scroll-behavior:auto}` 要带 `!important`：若该块在 CSS 前部，后面无标记的 `scroll-behavior:smooth` 会把它覆盖掉。
+
+**⑤ 极小值必须有地板宽度**
+
+`pct = v/mx*100` 对 `0.4 / 61` 给出 0.65%，约 5px。取 `max(pct, 10)`，但 **真 0 值保持 0**（空条诚实，10% 的假空条是在撒谎）。
+
+**⑥ 卡片底色必须遮住背景装饰**
+
+见 §7.1。`rgba(255,255,255,0.06)` 的"毛玻璃"等于没有遮罩。
+
+**⑦ 声明了就必须渲染出来（自检）**
+
+字段名打错（`bar` 而不是 `bars`、`colums` 而不是 `columns`）时，渲染器读不到就安静地什么都不画——页面少一节内容，而校验器 0 error 通过。这是最难发现的一类缺陷，因此渲染器在输出 HTML 后做**渲染后自检**（`render_html._selfcheck`）：
+
+- 死锚点：`href="#x"` 必须有对应 `id="x"`；
+- 声明数 == 构件数：写了 N 组 `bars` 就必须有 N 个 `.bar-chart`，N 个 `table` 章节对应 N 个 `<table class="tbl">`；
+- 空章节：有 `heading` 却没渲染出任何构件 → 报错；
+- 地板宽度：出现 `0 < --w < 10` 说明兜底被绕过。
+
+配套地，校验器加了 unknown-key 检查（`check_unknown_keys`）：与合法键高度相似（≥0.82）且带非空内容 → ERROR（"写了但页面上没有"）；其余不认识的键 → WARN；`_` 前缀视为作者注释静默跳过。阈值从严是因为**误杀比漏放行更糟**——判死会逼模型删掉有用信息。
+
+**⑧ 契约只能有一份定义**
+
+`SECTION_TYPES` / `FACT_TONES` / 字段配对文案原先散在三处（渲染器分支、校验器白名单、起草提示词），注释写着"与 render_html.py 硬编码一致"——所谓一致靠人工维持，必然漂移。现在统一由 `scripts/schema.py` 提供：提示词那一整块由 `SC.section_pairing()` 生成，渲染器 import 时 `SC.assert_renderers()` 断言"每个登记类型都有分支"。新增一个 section type 只改 schema 的枚举与配对，渲染分支与专属字段校验仍各自实现。
+
+**⑨ 主题相关颜色一律走变量**
+
+`border-bottom:1px solid rgba(255,255,255,.06)` 在深色下正常、亮色下白上白直接消失。写 `var(--line)`。同类问题：内联 SVG 的 `fill` 用 `currentColor` 或 `var(--…)`，不要写死。
+
+**⑩ 触控与命中区**
+
+可点元素 ≥44px 高；`-webkit-tap-highlight-color:transparent`。表格在移动端**不缩字号**，靠 `.tbl-wrap` 横滑（`min-width:520px` 保证列不被压扁）。
+
 ---
 
 ## 五、响应式设计策略
@@ -462,16 +569,22 @@ body {
 
 ### 7.1 毛玻璃卡片
 
+> ⚠️ **卡片底色必须近乎不透明**（v3 修正）。旧版这里写的是 `rgba(255,255,255,0.06)`，
+> 实测后果是背景粒子（300px 级色块）直接糊在正文上，截图里能看到紫红色脏斑，文字可读性下降。
+> 毛玻璃的"透"应来自 `backdrop-filter: blur()` 的**模糊**，而不是把底色设成几乎全透明。
+> 深色主题用带色相的实色（`rgba(38,41,66,0.88)`），亮色主题用纯白。
+
 ```
 .glass-card {
-    background: rgba(255,255,255,0.06);
+    background: rgba(38,41,66,0.88);       /* 深色：遮住粒子 */
     border: 1px solid rgba(255,255,255,0.1);
     border-radius: 16px;
     padding: 32px;
-    backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);            /* 模糊负责"毛"，底色负责"遮" */
     box-shadow: 0 8px 32px rgba(0,0,0,0.3);
     transition: transform 0.3s, box-shadow 0.3s, border-color 0.3s;
 }
+body[data-theme="light"] .glass-card { background: #ffffff; }
 .glass-card:hover {
     transform: translateY(-8px);
     box-shadow: 0 16px 48px rgba(0,0,0,0.4);
@@ -547,9 +660,15 @@ h2 { font-size: clamp(1.8rem, 4vw, 2.8rem); }
 p  { font-size: clamp(1rem, 2vw, 1.25rem); }
 ```
 
-### 7.7 量化机制条形图（v2 §3.3 / R3）
+### 7.7 量化机制条形图（v2 §3.3 / R3，v3 加固）
 
-用于把原文里"可计算"的机制可视化——倍数、参照点、增减对比（如长期支持 61% vs 一次性 19%）。**纯 CSS 色块条形，无 JS**；数值用 `--w` 自定义属性驱动 `transform:scaleX()` 生长动画（只用 transform/opacity，遵守 §4.2/§9.2）。挂在任意 section 的 `bars` 字段上：`bars=[{label,value,text?,tone?}]`、`bar_note?`。`value` 为数值（相对最大项归一化到宽度），`text` 为展示文案（缺省显示 value）。
+用于把原文里"可计算"的机制可视化——倍数、参照点、增减对比（如长期支持 61% vs 一次性 19%）。**纯 CSS 色块条形**；数值用 `--w` 自定义属性驱动 `transform:scaleX()` 生长动画（只用 transform/opacity，遵守 §4.2/§9.2）。挂在任意 section 的 `bars` 字段上：`bars=[{label,value,text?,tone?}]`、`bar_note?`。`value` 为数值（相对最大项归一化到宽度），`text` 为展示文案（缺省显示 value）。
+
+**v3 三条硬约束（都是实测踩出来的）**
+
+1. **极小值必须有地板宽度**。纯比例映射下 `0.4 / 61` 只有 0.65%，1280px 版面上约 5px，读者会判定"这项是 0"，于是把原文最要命的反差讲丢了。渲染器取 `max(v/mx*100, 10)`；**真 0 值仍归 0**（空条是诚实的表达，10% 的假空条不是）。
+2. **默认态就是终态，动画是增强**。旧写法 `transform:scaleX(0)` + `animation ... forwards` 直接写在 `.bar-fill` 上，页面一加载动画就跑完，读者滚到那一节时看到的是静止的条；更糟的是若动画被拦，条永久停在 0。v3 改成：基础规则给终态宽度，只有 `<html class="js">` 且 `.bar-chart.in`（IntersectionObserver 滚动进场时加）才播动画。
+3. **`--w` 要给 fallback**：`scaleX(calc(var(--w,100)/100))`。变量缺失时退回满宽，而不是整条声明失效导致条不显示。
 
 ```
 .bar-chart{display:flex;flex-direction:column;gap:13px;margin-top:16px;padding:22px 24px;
@@ -561,11 +680,15 @@ p  { font-size: clamp(1rem, 2vw, 1.25rem); }
 .bar-track{height:20px;border-radius:8px;background:var(--card2);overflow:hidden}
 .bar-fill{display:block;height:100%;border-radius:8px;
   background:linear-gradient(90deg,var(--grad-a),var(--grad-b));
-  transform:scaleX(0);transform-origin:left center;
-  animation:barGrow .9s cubic-bezier(.2,.7,.3,1) forwards}
+  transform:scaleX(calc(var(--w,100)/100));   /* ① 默认即终态 */
+  transform-origin:left center}
+.js .bar-fill{transform:scaleX(0)}            /* ② 只有 JS 在，才允许从 0 长 */
+.js .bar-chart.in .bar-fill{animation:barGrow .9s cubic-bezier(.2,.7,.3,1) forwards}
+.js .bar-chart.in .bar-row:nth-child(2) .bar-fill{animation-delay:80ms}
+.js .bar-chart.in .bar-row:nth-child(3) .bar-fill{animation-delay:160ms}
 .bar-row.green .bar-fill{background:linear-gradient(90deg,var(--accent2),var(--grad-b))}
 .bar-row.red .bar-fill{background:linear-gradient(90deg,var(--danger),var(--grad-c))}
-@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(calc(var(--w)/100))}}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(calc(var(--w,100)/100))}}
 .bar-note{margin-top:12px;font-size:12.5px;color:var(--dim);
   border-top:1px dashed var(--card-border);padding-top:10px}
 /* 移动端：标签与数值各占整行，避免定宽列溢出 */
@@ -574,7 +697,25 @@ p  { font-size: clamp(1rem, 2vw, 1.25rem); }
   .bar-row .bar-val{grid-column:1/-1;text-align:left;white-space:normal}}
 ```
 
-### 7.8 页脚折叠（v2 §3.1-6）
+### 7.8 二维对照表（v3 新增）
+
+档位、价格、排期、参数这类**多列属性**数据用表格，不要用卡片堆叠（卡片适合"一条一段话"，表格适合"同一维度横向比"）。选型口诀见 §2.4。
+
+```
+.tbl-wrap{overflow-x:auto;border:1px solid var(--card-border);border-radius:var(--radius);
+  box-shadow:var(--shadow);background:var(--card);backdrop-filter:blur(10px)}
+table.tbl{width:100%;border-collapse:collapse;font-size:14.5px;min-width:520px}
+table.tbl th{position:sticky;top:0;background:var(--card2);color:var(--txt);font-weight:800;
+  text-align:left;padding:12px 14px;border-bottom:1px solid var(--card-border);white-space:nowrap}
+table.tbl td{padding:11px 14px;border-bottom:1px solid var(--line);   /* 用 --line，不要写死白色 alpha：亮色主题下白上白=看不见 */
+  color:var(--muted);vertical-align:top}
+table.tbl td.num{font-variant-numeric:tabular-nums;color:var(--txt);font-weight:700;white-space:nowrap}
+table.tbl th:first-child,table.tbl td:first-child{white-space:nowrap;padding-right:18px}  /* 首列通常是行名，auto 布局会把它挤到换行 */
+```
+
+要点：外层 `.tbl-wrap` 负责横滑（移动端不缩字号、不折行），`min-width:520px` 保证列不被压扁；首列 `nowrap`；数字列 `tabular-nums` 对齐。**表格单元格里的数字同样是原文数字**，必须可回溯（校验器会查）。
+
+### 7.9 页脚折叠（v2 §3.1-6）
 
 校正说明与实体列表默认折叠，普通读者不被生产过程信息干扰，点开可见；生成声明不折叠。
 
